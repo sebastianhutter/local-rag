@@ -1,4 +1,8 @@
-"""Obsidian vault indexer for local-rag."""
+"""Obsidian vault indexer for local-rag.
+
+Indexes all supported file types found in Obsidian vaults (markdown, PDF,
+DOCX, HTML, plaintext, etc.) into the "obsidian" system collection.
+"""
 
 import hashlib
 import json
@@ -7,12 +11,11 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from local_rag.chunker import chunk_markdown
 from local_rag.config import Config
 from local_rag.db import get_or_create_collection
 from local_rag.embeddings import get_embeddings, serialize_float32
 from local_rag.indexers.base import BaseIndexer, IndexResult
-from local_rag.parsers.markdown import parse_markdown
+from local_rag.indexers.project import _EXTENSION_MAP, _parse_and_chunk
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +24,7 @@ _SKIP_DIRS = {".obsidian", ".trash", ".git"}
 
 
 class ObsidianIndexer(BaseIndexer):
-    """Indexes Obsidian vault markdown files."""
+    """Indexes all supported files in Obsidian vaults."""
 
     def __init__(self, vault_paths: list[Path]) -> None:
         self.vault_paths = vault_paths
@@ -54,19 +57,19 @@ class ObsidianIndexer(BaseIndexer):
                 continue
 
             logger.info("Indexing Obsidian vault: %s", vault_path)
-            md_files = list(_walk_vault(vault_path))
-            total_found += len(md_files)
-            logger.info("Found %d markdown files in %s", len(md_files), vault_path)
+            files = _walk_vault(vault_path)
+            total_found += len(files)
+            logger.info("Found %d supported files in %s", len(files), vault_path)
 
-            for md_file in md_files:
+            for file_path in files:
                 try:
-                    result = _index_file(conn, config, collection_id, md_file, force)
+                    result = _index_file(conn, config, collection_id, file_path, force)
                     if result == "indexed":
                         indexed += 1
                     elif result == "skipped":
                         skipped += 1
                 except Exception:
-                    logger.exception("Error indexing %s", md_file)
+                    logger.exception("Error indexing %s", file_path)
                     errors += 1
 
         logger.info(
@@ -77,15 +80,20 @@ class ObsidianIndexer(BaseIndexer):
 
 
 def _walk_vault(vault_path: Path) -> list[Path]:
-    """Walk an Obsidian vault, yielding .md files while skipping hidden/system dirs."""
+    """Walk an Obsidian vault, yielding all supported files while skipping hidden/system dirs."""
     results: list[Path] = []
-    for item in sorted(vault_path.rglob("*.md")):
+    for item in sorted(vault_path.rglob("*")):
+        if not item.is_file():
+            continue
         # Skip files in hidden or system directories
         parts = item.relative_to(vault_path).parts
         if any(part.startswith(".") or part in _SKIP_DIRS for part in parts[:-1]):
             continue
         # Skip hidden files
         if item.name.startswith("."):
+            continue
+        # Only include files with supported extensions
+        if item.suffix.lower() not in _EXTENSION_MAP:
             continue
         results.append(item)
     return results
@@ -105,13 +113,14 @@ def _index_file(
     file_path: Path,
     force: bool,
 ) -> str:
-    """Index a single markdown file.
+    """Index a single file of any supported type.
 
     Returns:
         'indexed' if the file was processed, 'skipped' if unchanged.
     """
     source_path = str(file_path)
     content_hash = _file_hash(file_path)
+    source_type = _EXTENSION_MAP.get(file_path.suffix.lower(), "plaintext")
     mtime = datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc).isoformat()
 
     # Check if source already exists with same hash
@@ -124,17 +133,11 @@ def _index_file(
             logger.debug("Skipping unchanged file: %s", file_path.name)
             return "skipped"
 
-    # Read and parse the file
-    raw_text = file_path.read_text(encoding="utf-8")
-    doc = parse_markdown(raw_text, file_path.name)
-
-    # Chunk the parsed content
-    chunks = chunk_markdown(
-        doc.body_text,
-        doc.title,
-        chunk_size=config.chunk_size_tokens,
-        overlap=config.chunk_overlap_tokens,
-    )
+    # Parse and chunk using the shared dispatch from project indexer
+    chunks = _parse_and_chunk(file_path, source_type, config)
+    if not chunks:
+        logger.warning("No content extracted from %s, skipping", file_path)
+        return "skipped"
 
     # Embed all chunks in a batch
     chunk_texts = [c.text for c in chunks]
@@ -166,28 +169,19 @@ def _index_file(
             conn.execute("DELETE FROM documents WHERE source_id = ?", (source_id,))
 
         conn.execute(
-            "UPDATE sources SET file_hash = ?, file_modified_at = ?, last_indexed_at = ? WHERE id = ?",
-            (content_hash, mtime, now, source_id),
+            "UPDATE sources SET file_hash = ?, file_modified_at = ?, last_indexed_at = ?, source_type = ? WHERE id = ?",
+            (content_hash, mtime, now, source_type, source_id),
         )
     else:
         cursor = conn.execute(
             "INSERT INTO sources (collection_id, source_type, source_path, file_hash, file_modified_at, last_indexed_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (collection_id, "markdown", source_path, content_hash, mtime, now),
+            (collection_id, source_type, source_path, content_hash, mtime, now),
         )
         source_id = cursor.lastrowid
 
-    # Build metadata from parsed document
-    base_metadata = {}
-    if doc.tags:
-        base_metadata["tags"] = doc.tags
-    if doc.links:
-        base_metadata["links"] = doc.links
-    if doc.frontmatter:
-        base_metadata["frontmatter"] = doc.frontmatter
-
     # Insert new documents and vectors
     for chunk, embedding in zip(chunks, embeddings):
-        chunk_meta = {**base_metadata, **chunk.metadata}
+        metadata_json = json.dumps(chunk.metadata) if chunk.metadata else None
         cursor = conn.execute(
             "INSERT INTO documents (source_id, collection_id, chunk_index, title, content, metadata) VALUES (?, ?, ?, ?, ?, ?)",
             (
@@ -196,7 +190,7 @@ def _index_file(
                 chunk.chunk_index,
                 chunk.title,
                 chunk.text,
-                json.dumps(chunk_meta) if chunk_meta else None,
+                metadata_json,
             ),
         )
         doc_id = cursor.lastrowid
@@ -207,5 +201,5 @@ def _index_file(
         )
 
     conn.commit()
-    logger.info("Indexed %s (%d chunks)", file_path.name, len(chunks))
+    logger.info("Indexed %s [%s] (%d chunks)", file_path.name, source_type, len(chunks))
     return "indexed"
