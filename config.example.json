@@ -1,0 +1,17 @@
+{
+    "db_path": "~/.local-rag/rag.db",
+    "embedding_model": "bge-m3",
+    "embedding_dimensions": 1024,
+    "chunk_size_tokens": 500,
+    "chunk_overlap_tokens": 50,
+    "obsidian_vaults": [
+        "~/Documents/MyVault"
+    ],
+    "emclient_db_path": "~/Library/Application Support/eM Client",
+    "search_defaults": {
+        "top_k": 10,
+        "rrf_k": 60,
+        "vector_weight": 0.7,
+        "fts_weight": 0.3
+    }
+}

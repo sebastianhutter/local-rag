@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Local RAG data
+*.db
+*.db-wal
+*.db-shm
+data/
+
+# Config with real paths
+config.json
+
+# macOS
+.DS_Store
+
+# Environment
+.env
