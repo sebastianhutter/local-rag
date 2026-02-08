@@ -269,3 +269,15 @@ launchctl load ~/Library/LaunchAgents/com.local-rag.index.plist
 | Code parsing | tree-sitter |
 | CLI | click |
 | MCP server | mcp Python SDK (FastMCP) |
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+
+**Note on PyMuPDF (pymupdf):** The PDF parsing dependency
+[PyMuPDF](https://pymupdf.readthedocs.io/) is dual-licensed under
+**GNU AGPL 3.0** and a commercial Artifex license. If the AGPL terms are
+not acceptable for your use case, you can obtain a
+[commercial license from Artifex](https://artifex.com/products/pymupdf/)
+or replace pymupdf with an alternative PDF library (e.g. `pypdf`, BSD).
+All other dependencies use permissive licenses (MIT, BSD, Apache 2.0).
