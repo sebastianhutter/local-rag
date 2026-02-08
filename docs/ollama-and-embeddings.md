@@ -33,7 +33,7 @@ An embedding is a list of numbers (a vector) that represents the meaning of a pi
 
 For example, the bge-m3 model converts text into a vector of 1024 floating-point numbers:
 
-```
+```shell
 "kubernetes deployment" → [0.023, -0.156, 0.891, ..., 0.042]  (1024 numbers)
 "k8s rollout strategy"  → [0.019, -0.148, 0.887, ..., 0.039]  (1024 numbers, very similar)
 "chocolate cake recipe"  → [-0.412, 0.733, -0.024, ..., 0.518]  (1024 numbers, very different)
