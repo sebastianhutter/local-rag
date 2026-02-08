@@ -1,13 +1,12 @@
 """MCP server exposing local-rag search and index tools."""
 
-import json
 import logging
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from local_rag.config import load_config
-from local_rag.db import get_connection, get_or_create_collection, init_db
+from local_rag.db import get_connection, init_db
 
 logger = logging.getLogger(__name__)
 
@@ -24,60 +23,103 @@ def create_server() -> FastMCP:
         source_type: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
+        sender: str | None = None,
         author: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Search across indexed collections using hybrid vector + full-text search.
+        """Search personal knowledge using hybrid vector + full-text search with Reciprocal Rank Fusion.
+
+        Searches across all indexed collections by default. Combines semantic similarity
+        (understands meaning) with keyword matching (finds exact phrases) for best results.
+
+        ## Collections and their metadata
+
+        **obsidian** (system) — Obsidian vault notes and attachments.
+          Source types: markdown, pdf, docx, epub, html, txt.
+          Metadata: tags, heading_path.
+          Useful filters: source_type, date_from/date_to.
+
+        **email** (system) — eM Client emails.
+          Source types: email.
+          Metadata: sender, recipients, date, folder.
+          Useful filters: sender, date_from/date_to.
+
+        **calibre** (system) — Calibre ebook library.
+          Source types: pdf, epub.
+          Metadata: authors, tags, series, publisher, page_number.
+          Useful filters: author, date_from/date_to.
+
+        **rss** (system) — NetNewsWire RSS articles.
+          Source types: rss.
+          Metadata: feed_name, url, date.
+          Useful filters: date_from/date_to.
+
+        **Git repositories** (code) — Indexed git repos, one collection per repo.
+          Source types: code.
+          Metadata: language, symbol_name, symbol_type, start_line.
+          Useful filters: collection=<repo-name>, or collection=code for all repos.
+
+        **Project folders** (project) — User-created document collections.
+          Source types: vary by content (markdown, pdf, docx, etc.).
+          Useful filters: collection=<project-name>.
+
+        ## Collection filtering
+
+        The `collection` parameter accepts either a collection name or a collection type:
+        - Name (e.g., "obsidian", "email", "my-project") — searches that specific collection.
+        - Type ("system", "project", "code") — searches all collections of that type.
+
+        ## Examples
+
+        - Search everything: query="kubernetes deployment strategy"
+        - Search emails from someone: query="invoice", sender="john@example.com"
+        - Search a specific repo: query="authentication middleware", collection="my-api"
+        - Search all code repos: query="database connection pool", collection="code"
+        - Search books by author: query="machine learning", author="Bishop"
+        - Search PDFs in Obsidian: query="tax return", collection="obsidian", source_type="pdf"
+        - Search recent emails: query="project update", sender="boss", date_from="2025-01-01"
+        - Search RSS articles: query="AI regulation", collection="rss", date_from="2025-06-01"
 
         Args:
-            query: The search query text.
-            collection: Optional collection name or collection type to search within.
-                Can be a specific collection name (e.g., 'obsidian', 'email') or a
-                collection type ('system', 'project', 'code') to search all collections
-                of that type. Use 'code' to search across all indexed git repositories.
+            query: The search query text. Can be a natural language question or keywords.
+            collection: Filter by collection name (e.g., 'obsidian', 'email', 'my-project')
+                or collection type ('system', 'project', 'code'). Omit to search everything.
             top_k: Number of results to return (default 10).
-            source_type: Filter by source type (e.g., 'pdf', 'markdown', 'email', 'code', 'rss').
+            source_type: Filter by source type: 'markdown', 'pdf', 'docx', 'epub', 'html',
+                'txt', 'email', 'code', 'rss'.
             date_from: Only results after this date (YYYY-MM-DD).
             date_to: Only results before this date (YYYY-MM-DD).
+            sender: Filter by email sender (case-insensitive substring match).
             author: Filter by book author (case-insensitive substring match).
         """
-        from local_rag.embeddings import OllamaConnectionError, get_embedding
-        from local_rag.search import SearchFilters
-        from local_rag.search import search as do_search
-
-        config = load_config()
-        conn = get_connection(config)
-        init_db(conn, config)
+        from local_rag.embeddings import OllamaConnectionError
+        from local_rag.search import perform_search
 
         try:
-            try:
-                query_embedding = get_embedding(query, config)
-            except OllamaConnectionError as e:
-                return [{"error": str(e)}]
-
-            filters = SearchFilters(
+            results = perform_search(
+                query=query,
                 collection=collection,
+                top_k=top_k,
                 source_type=source_type,
                 date_from=date_from,
                 date_to=date_to,
+                sender=sender,
                 author=author,
             )
+        except OllamaConnectionError as e:
+            return [{"error": str(e)}]
 
-            results = do_search(conn, query_embedding, query, top_k, filters, config)
-
-            return [
-                {
-                    "title": r.title,
-                    "content": r.content,
-                    "collection": r.collection,
-                    "source_type": r.source_type,
-                    "source_path": r.source_path,
-                    "score": round(r.score, 4),
-                    "metadata": r.metadata,
-                }
-                for r in results
-            ]
-        finally:
-            conn.close()
+        return [
+            {
+                "title": r.title,
+                "content": r.content,
+                "collection": r.collection,
+                "source_type": r.source_type,
+                "source_path": r.source_path,
+                "score": round(r.score, 4),
+                "metadata": r.metadata,
+            }
+            for r in results
+        ]
 
     @mcp.tool()
     def rag_list_collections() -> list[dict[str, Any]]:

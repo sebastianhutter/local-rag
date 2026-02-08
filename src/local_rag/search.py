@@ -5,7 +5,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 
-from local_rag.config import Config
+from local_rag.config import Config, load_config
 from local_rag.embeddings import serialize_float32
 
 logger = logging.getLogger(__name__)
@@ -294,3 +294,59 @@ def search(
             )
 
     return results
+
+
+def perform_search(
+    query: str,
+    collection: str | None = None,
+    top_k: int = 10,
+    source_type: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    sender: str | None = None,
+    author: str | None = None,
+) -> list[SearchResult]:
+    """Run a full hybrid search: load config, connect, embed, search, cleanup.
+
+    This is a high-level convenience wrapper that handles the complete
+    config → connection → embedding → search → cleanup flow. Used by both
+    the CLI and MCP server to avoid duplicating the same boilerplate.
+
+    Args:
+        query: The search query text.
+        collection: Optional collection name or type to filter results.
+        top_k: Number of results to return.
+        source_type: Filter by source type (e.g., 'pdf', 'markdown', 'email').
+        date_from: Only results after this date (YYYY-MM-DD).
+        date_to: Only results before this date (YYYY-MM-DD).
+        sender: Filter by email sender (case-insensitive substring match).
+        author: Filter by book author (case-insensitive substring match).
+
+    Returns:
+        List of SearchResult objects sorted by relevance.
+
+    Raises:
+        local_rag.embeddings.OllamaConnectionError: If Ollama is not reachable.
+    """
+    from local_rag.db import get_connection, init_db
+    from local_rag.embeddings import get_embedding
+
+    config = load_config()
+    conn = get_connection(config)
+    init_db(conn, config)
+
+    try:
+        query_embedding = get_embedding(query, config)
+
+        filters = SearchFilters(
+            collection=collection,
+            source_type=source_type,
+            date_from=date_from,
+            date_to=date_to,
+            sender=sender,
+            author=author,
+        )
+
+        return search(conn, query_embedding, query, top_k, filters, config)
+    finally:
+        conn.close()

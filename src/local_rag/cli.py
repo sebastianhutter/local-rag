@@ -324,73 +324,65 @@ def index_all(force: bool) -> None:
 def search(query: str, collection: str | None, source_type: str | None,
            sender: str | None, author: str | None, after: str | None, before: str | None, top: int) -> None:
     """Search across indexed collections."""
-    from local_rag.embeddings import OllamaConnectionError, get_embedding
-    from local_rag.search import SearchFilters
-    from local_rag.search import search as do_search
+    from local_rag.embeddings import OllamaConnectionError
+    from local_rag.search import perform_search
 
-    config = load_config()
-    conn = _get_db(config)
     try:
-        try:
-            query_embedding = get_embedding(query, config)
-        except OllamaConnectionError as e:
-            click.echo(f"Error: {e}", err=True)
-            sys.exit(1)
-
-        filters = SearchFilters(
+        results = perform_search(
+            query=query,
             collection=collection,
+            top_k=top,
             source_type=source_type,
             date_from=after,
             date_to=before,
             sender=sender,
             author=author,
         )
+    except OllamaConnectionError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
 
-        results = do_search(conn, query_embedding, query, top, filters, config)
+    if not results:
+        click.echo("No results found.")
+        return
 
-        if not results:
-            click.echo("No results found.")
-            return
-
-        for i, r in enumerate(results, 1):
-            # Color-code score
-            score = r.score
-            if score >= 0.7:
-                score_text = Text(f"{score:.4f}", style="green")
-            elif score >= 0.4:
-                score_text = Text(f"{score:.4f}", style="yellow")
-            else:
-                score_text = Text(f"{score:.4f}", style="red")
-
-            console.print()
-            console.rule(f"[bold]\\[{i}] {r.title}[/bold]", style="dim")
-
-            meta_table = Table(show_header=False, box=None, padding=(0, 2))
-            meta_table.add_column("Key", style="bold")
-            meta_table.add_column("Value")
-            meta_table.add_row("Collection", r.collection)
-            meta_table.add_row("Type", r.source_type)
-            meta_table.add_row("Score", score_text)
-            meta_table.add_row("Source", r.source_path)
-
-            if r.metadata:
-                meta_items = {k: v for k, v in r.metadata.items() if k != "heading_path"}
-                if meta_items:
-                    meta_str = ", ".join(f"{k}={v}" for k, v in meta_items.items())
-                    meta_table.add_row("Meta", meta_str)
-
-            console.print(meta_table)
-
-            # Show snippet (first 300 chars)
-            snippet = r.content[:300].replace("\n", " ")
-            if len(r.content) > 300:
-                snippet += "..."
-            console.print(f"  [dim]{snippet}[/dim]")
+    for i, r in enumerate(results, 1):
+        # Color-code score
+        score = r.score
+        if score >= 0.7:
+            score_text = Text(f"{score:.4f}", style="green")
+        elif score >= 0.4:
+            score_text = Text(f"{score:.4f}", style="yellow")
+        else:
+            score_text = Text(f"{score:.4f}", style="red")
 
         console.print()
-        console.print(f"[bold]{len(results)}[/bold] result(s) found.")
-    finally:
-        conn.close()
+        console.rule(f"[bold]\\[{i}] {r.title}[/bold]", style="dim")
+
+        meta_table = Table(show_header=False, box=None, padding=(0, 2))
+        meta_table.add_column("Key", style="bold")
+        meta_table.add_column("Value")
+        meta_table.add_row("Collection", r.collection)
+        meta_table.add_row("Type", r.source_type)
+        meta_table.add_row("Score", score_text)
+        meta_table.add_row("Source", r.source_path)
+
+        if r.metadata:
+            meta_items = {k: v for k, v in r.metadata.items() if k != "heading_path"}
+            if meta_items:
+                meta_str = ", ".join(f"{k}={v}" for k, v in meta_items.items())
+                meta_table.add_row("Meta", meta_str)
+
+        console.print(meta_table)
+
+        # Show snippet (first 300 chars)
+        snippet = r.content[:300].replace("\n", " ")
+        if len(r.content) > 300:
+            snippet += "..."
+        console.print(f"  [dim]{snippet}[/dim]")
+
+    console.print()
+    console.print(f"[bold]{len(results)}[/bold] result(s) found.")
 
 
 # ── Collections commands ────────────────────────────────────────────────
