@@ -8,6 +8,9 @@
         "~/Documents/MyVault"
     ],
     "emclient_db_path": "~/Library/Application Support/eM Client",
+    "calibre_libraries": [
+        "~/CalibreLibrary"
+    ],
     "search_defaults": {
         "top_k": 10,
         "rrf_k": 60,

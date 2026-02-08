@@ -109,6 +109,34 @@ def index_email(force: bool) -> None:
         conn.close()
 
 
+@index.command("calibre")
+@click.option("--library", "-l", "libraries", multiple=True, type=click.Path(exists=True, path_type=Path),
+              help="Library path(s). If omitted, uses config.")
+@click.option("--force", is_flag=True, help="Force re-index all books.")
+def index_calibre(libraries: tuple[Path, ...], force: bool) -> None:
+    """Index Calibre ebook library/libraries."""
+    from local_rag.indexers.calibre_indexer import CalibreIndexer
+
+    config = load_config()
+    library_paths = list(libraries) if libraries else config.calibre_libraries
+
+    if not library_paths:
+        click.echo("Error: No library paths provided. Use --library or set calibre_libraries in config.", err=True)
+        sys.exit(1)
+
+    conn = _get_db(config)
+    try:
+        indexer = CalibreIndexer(library_paths)
+        result = indexer.index(conn, config, force=force)
+        click.echo(
+            f"Calibre indexing complete: {result.indexed} indexed, "
+            f"{result.skipped} skipped, {result.errors} errors "
+            f"(out of {result.total_found} books found)"
+        )
+    finally:
+        conn.close()
+
+
 @index.command("project")
 @click.argument("name")
 @click.argument("paths", nargs=-1, required=True, type=click.Path(exists=True, path_type=Path))
@@ -139,6 +167,7 @@ def index_project(name: str, paths: tuple[Path, ...], force: bool) -> None:
 @click.option("--force", is_flag=True, default=True, hidden=True)
 def reindex(collection: str, force: bool) -> None:
     """Force full re-index of a collection."""
+    from local_rag.indexers.calibre_indexer import CalibreIndexer
     from local_rag.indexers.email_indexer import EmailIndexer
     from local_rag.indexers.obsidian import ObsidianIndexer
     from local_rag.indexers.project import ProjectIndexer
@@ -159,6 +188,8 @@ def reindex(collection: str, force: bool) -> None:
             indexer = ObsidianIndexer(config.obsidian_vaults)
         elif collection == "email":
             indexer = EmailIndexer(str(config.emclient_db_path))
+        elif collection == "calibre":
+            indexer = CalibreIndexer(config.calibre_libraries)
         else:
             # Project collection — get paths from sources table
             sources = conn.execute(
@@ -188,11 +219,12 @@ def reindex(collection: str, force: bool) -> None:
 @click.option("--collection", "-c", help="Search within a specific collection.")
 @click.option("--type", "source_type", help="Filter by source type (e.g., pdf, markdown, email).")
 @click.option("--from", "sender", help="Filter by email sender.")
+@click.option("--author", help="Filter by book author (case-insensitive substring match).")
 @click.option("--after", help="Only results after this date (YYYY-MM-DD).")
 @click.option("--before", help="Only results before this date (YYYY-MM-DD).")
 @click.option("--top", default=10, show_default=True, help="Number of results to return.")
 def search(query: str, collection: str | None, source_type: str | None,
-           sender: str | None, after: str | None, before: str | None, top: int) -> None:
+           sender: str | None, author: str | None, after: str | None, before: str | None, top: int) -> None:
     """Search across indexed collections."""
     from local_rag.embeddings import OllamaConnectionError, get_embedding
     from local_rag.search import SearchFilters
@@ -213,6 +245,7 @@ def search(query: str, collection: str | None, source_type: str | None,
             date_from=after,
             date_to=before,
             sender=sender,
+            author=author,
         )
 
         results = do_search(conn, query_embedding, query, top, filters, config)

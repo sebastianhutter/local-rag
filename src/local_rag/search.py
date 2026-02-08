@@ -33,6 +33,7 @@ class SearchFilters:
     date_from: str | None = None
     date_to: str | None = None
     sender: str | None = None
+    author: str | None = None
 
 
 def _vector_search(
@@ -154,12 +155,18 @@ def _passes_filters(
     if filters.source_type and row["source_type"] != filters.source_type:
         return False
 
-    if filters.sender or filters.date_from or filters.date_to:
+    if filters.sender or filters.author or filters.date_from or filters.date_to:
         metadata = json.loads(row["metadata"]) if row["metadata"] else {}
 
         if filters.sender:
             doc_sender = metadata.get("sender", "")
             if filters.sender.lower() not in doc_sender.lower():
+                return False
+
+        if filters.author:
+            authors = metadata.get("authors", [])
+            author_lower = filters.author.lower()
+            if not any(author_lower in a.lower() for a in authors):
                 return False
 
         doc_date = metadata.get("date", "")

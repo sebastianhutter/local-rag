@@ -24,6 +24,7 @@ def create_server() -> FastMCP:
         source_type: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
+        author: str | None = None,
     ) -> list[dict[str, Any]]:
         """Search across indexed collections using hybrid vector + full-text search.
 
@@ -34,6 +35,7 @@ def create_server() -> FastMCP:
             source_type: Filter by source type (e.g., 'pdf', 'markdown', 'email').
             date_from: Only results after this date (YYYY-MM-DD).
             date_to: Only results before this date (YYYY-MM-DD).
+            author: Filter by book author (case-insensitive substring match).
         """
         from local_rag.embeddings import OllamaConnectionError, get_embedding
         from local_rag.search import SearchFilters
@@ -54,6 +56,7 @@ def create_server() -> FastMCP:
                 source_type=source_type,
                 date_from=date_from,
                 date_to=date_to,
+                author=author,
             )
 
             results = do_search(conn, query_embedding, query, top_k, filters, config)
@@ -118,6 +121,7 @@ def create_server() -> FastMCP:
         """
         from pathlib import Path as P
 
+        from local_rag.indexers.calibre_indexer import CalibreIndexer
         from local_rag.indexers.email_indexer import EmailIndexer
         from local_rag.indexers.obsidian import ObsidianIndexer
         from local_rag.indexers.project import ProjectIndexer
@@ -131,6 +135,8 @@ def create_server() -> FastMCP:
                 indexer = ObsidianIndexer(config.obsidian_vaults)
             elif collection == "email":
                 indexer = EmailIndexer(str(config.emclient_db_path))
+            elif collection == "calibre":
+                indexer = CalibreIndexer(config.calibre_libraries)
             else:
                 if not path:
                     return {"error": f"Path required for project collection '{collection}'."}
