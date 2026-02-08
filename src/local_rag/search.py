@@ -48,6 +48,15 @@ def _vector_search(
     """
     query_blob = serialize_float32(query_embedding)
 
+    # When filters are active, fetch a much larger candidate pool since most
+    # candidates will be filtered out (e.g., searching "flux" with --from
+    # needs to scan past hundreds of non-matching results).
+    has_filters = filters and (
+        filters.collection or filters.source_type or filters.sender
+        or filters.author or filters.date_from or filters.date_to
+    )
+    candidate_limit = top_k * 50 if has_filters else top_k * 3
+
     # Get candidate document IDs from vec_documents
     rows = conn.execute(
         """
@@ -57,10 +66,10 @@ def _vector_search(
         ORDER BY distance
         LIMIT ?
         """,
-        (query_blob, top_k * 3),  # Fetch more to allow for filtering
+        (query_blob, candidate_limit),
     ).fetchall()
 
-    if not filters:
+    if not has_filters:
         return [(row["document_id"], row["distance"]) for row in rows[:top_k]]
 
     # Apply filters by looking up document metadata
@@ -90,6 +99,12 @@ def _fts_search(
     if not safe_query:
         return []
 
+    has_filters = filters and (
+        filters.collection or filters.source_type or filters.sender
+        or filters.author or filters.date_from or filters.date_to
+    )
+    candidate_limit = top_k * 50 if has_filters else top_k * 3
+
     try:
         rows = conn.execute(
             """
@@ -99,13 +114,13 @@ def _fts_search(
             ORDER BY rank
             LIMIT ?
             """,
-            (safe_query, top_k * 3),
+            (safe_query, candidate_limit),
         ).fetchall()
     except sqlite3.OperationalError as e:
         logger.warning("FTS query failed for '%s': %s", safe_query, e)
         return []
 
-    if not filters:
+    if not has_filters:
         return [(row["rowid"], row["rank"]) for row in rows[:top_k]]
 
     filtered = []
