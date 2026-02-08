@@ -155,7 +155,6 @@ Relationships: `collections` 1:N `sources` 1:N `documents`. CASCADE deletes ensu
 local-rag index obsidian [--vault PATH]    Index Obsidian vault(s)
 local-rag index email                      Index eM Client emails
 local-rag index project NAME PATH...       Index docs into a project collection
-local-rag reindex COLLECTION               Force full re-index
 local-rag search QUERY [--collection]      Hybrid search with filters
 local-rag collections list                 List all collections
 local-rag collections info NAME            Detailed collection info

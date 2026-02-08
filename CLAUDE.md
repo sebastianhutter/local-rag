@@ -333,7 +333,6 @@ This takes only a shared lock (won't block eM Client) and prevents any accidenta
 local-rag index obsidian [--vault PATH]...       # Index Obsidian vaults (from config or args)
 local-rag index email                             # Index eM Client emails
 local-rag index project "Name" PATH [PATH]...    # Index docs into a named project
-local-rag reindex COLLECTION                      # Force full re-index of a collection
 
 # Searching
 local-rag search "query text"                     # Search all collections

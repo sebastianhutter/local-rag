@@ -147,8 +147,8 @@ To switch models:
 3. **Re-index everything** — embeddings from different models are incompatible
 
 ```bash
-uv run local-rag reindex obsidian
-uv run local-rag reindex email
+uv run local-rag index obsidian --force
+uv run local-rag index email --force
 # Repeat for each collection
 ```
 

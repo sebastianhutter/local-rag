@@ -217,66 +217,6 @@ def index_repo(path: Path | None, name: str | None, force: bool) -> None:
         conn.close()
 
 
-# ── Reindex command ─────────────────────────────────────────────────────
-
-
-@main.command()
-@click.argument("collection")
-@click.option("--force", is_flag=True, default=True, hidden=True)
-def reindex(collection: str, force: bool) -> None:
-    """Force full re-index of a collection."""
-    from local_rag.indexers.calibre_indexer import CalibreIndexer
-    from local_rag.indexers.email_indexer import EmailIndexer
-    from local_rag.indexers.git_indexer import GitRepoIndexer, _parse_watermark
-    from local_rag.indexers.obsidian import ObsidianIndexer
-    from local_rag.indexers.project import ProjectIndexer
-    from local_rag.indexers.rss_indexer import RSSIndexer
-
-    config = load_config()
-    conn = _get_db(config)
-    try:
-        # Determine indexer based on collection type
-        row = conn.execute(
-            "SELECT id, collection_type, description FROM collections WHERE name = ?", (collection,)
-        ).fetchone()
-
-        if not row:
-            click.echo(f"Error: Collection '{collection}' not found.", err=True)
-            sys.exit(1)
-
-        if collection == "obsidian":
-            indexer = ObsidianIndexer(config.obsidian_vaults, config.obsidian_exclude_folders)
-        elif collection == "email":
-            indexer = EmailIndexer(str(config.emclient_db_path))
-        elif collection == "calibre":
-            indexer = CalibreIndexer(config.calibre_libraries)
-        elif collection == "rss":
-            indexer = RSSIndexer(str(config.netnewswire_db_path))
-        elif _parse_watermark(row["description"]):
-            # Git repo collection — extract repo path from watermark
-            repo_path_str, _ = _parse_watermark(row["description"])
-            indexer = GitRepoIndexer(Path(repo_path_str), collection_name=collection)
-        else:
-            # Project collection — get paths from sources table
-            sources = conn.execute(
-                "SELECT DISTINCT source_path FROM sources WHERE collection_id = ?",
-                (row["id"],),
-            ).fetchall()
-            paths = list({Path(s["source_path"]).parent for s in sources})
-            if not paths:
-                click.echo(f"Error: No source paths found for collection '{collection}'.", err=True)
-                sys.exit(1)
-            indexer = ProjectIndexer(collection, paths)
-
-        result = indexer.index(conn, config, force=True)
-        click.echo(
-            f"Reindex of '{collection}' complete: {result.indexed} indexed, "
-            f"{result.skipped} skipped, {result.errors} errors"
-        )
-    finally:
-        conn.close()
-
-
 # ── Search command ──────────────────────────────────────────────────────
 
 
