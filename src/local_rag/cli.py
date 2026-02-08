@@ -193,38 +193,39 @@ def index_project(name: str, paths: tuple[Path, ...], force: bool) -> None:
         conn.close()
 
 
-@index.command("repo")
-@click.argument("path", required=False, type=click.Path(exists=True, path_type=Path))
-@click.option("--name", "-n", default=None, help="Collection name (defaults to repo dir name).")
+@index.command("group")
+@click.argument("name", required=False)
 @click.option("--force", is_flag=True, help="Force re-index all files.")
-def index_repo(path: Path | None, name: str | None, force: bool) -> None:
-    """Index a git repository's code files.
+def index_group(name: str | None, force: bool) -> None:
+    """Index code group(s) from config.
 
-    If PATH is given, indexes that single repo. If omitted, indexes all repos
-    listed in the git_repos config.
+    If NAME is given, indexes only that group's repos. If omitted, indexes
+    all groups defined in code_groups config.
     """
     from local_rag.indexers.git_indexer import GitRepoIndexer
 
     config = load_config()
 
-    if path:
-        repo_paths = [path]
-    elif config.git_repos:
-        repo_paths = config.git_repos
+    if name:
+        if name not in config.code_groups:
+            click.echo(f"Error: Group '{name}' not found in code_groups config.", err=True)
+            sys.exit(1)
+        groups = {name: config.code_groups[name]}
+    elif config.code_groups:
+        groups = config.code_groups
     else:
-        click.echo("Error: No path provided and no git_repos configured.", err=True)
+        click.echo("Error: No code_groups configured in ~/.local-rag/config.json.", err=True)
         sys.exit(1)
 
     conn = _get_db(config)
     try:
-        for repo_path in repo_paths:
-            # --name only applies when indexing a single explicit repo
-            coll_name = name if (path and name) else None
-            resolved_name = coll_name or repo_path.name
-            _check_collection_enabled(config, resolved_name)
-            indexer = GitRepoIndexer(repo_path, collection_name=coll_name)
-            result = indexer.index(conn, config, force=force)
-            _print_index_result(indexer.collection_name, result)
+        for group_name, repo_paths in groups.items():
+            _check_collection_enabled(config, group_name)
+            for repo_path in repo_paths:
+                click.echo(f"  {group_name}: {repo_path}")
+                indexer = GitRepoIndexer(repo_path, collection_name=group_name)
+                result = indexer.index(conn, config, force=force)
+                _print_index_result(f"{group_name}/{repo_path.name}", result)
     finally:
         conn.close()
 
@@ -234,7 +235,7 @@ def index_repo(path: Path | None, name: str | None, force: bool) -> None:
 def index_all(force: bool) -> None:
     """Index all configured sources at once.
 
-    Indexes obsidian, email, calibre, rss, and git repos based on what
+    Indexes obsidian, email, calibre, rss, and code groups based on what
     is configured in ~/.local-rag/config.json. Skips any source that
     has no paths configured.
     """
@@ -261,11 +262,10 @@ def index_all(force: bool) -> None:
     if config.is_collection_enabled("rss") and config.netnewswire_db_path and config.netnewswire_db_path.exists():
         sources.append(("rss", RSSIndexer(str(config.netnewswire_db_path))))
 
-    if config.git_repos:
-        for repo_path in config.git_repos:
-            coll_name = repo_path.name
-            if config.is_collection_enabled(coll_name):
-                sources.append((coll_name, GitRepoIndexer(repo_path)))
+    for group_name, repo_paths in config.code_groups.items():
+        if config.is_collection_enabled(group_name):
+            for repo_path in repo_paths:
+                sources.append((f"{group_name}/{repo_path.name}", GitRepoIndexer(repo_path, collection_name=group_name)))
 
     if not sources:
         click.echo("No sources configured. Set paths in ~/.local-rag/config.json.", err=True)

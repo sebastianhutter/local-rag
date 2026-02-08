@@ -50,7 +50,7 @@ class Config:
             / "Accounts"
         )
     )
-    git_repos: list[Path] = field(default_factory=list)
+    code_groups: dict[str, list[Path]] = field(default_factory=dict)
     disabled_collections: set[str] = field(default_factory=set)
     search_defaults: SearchDefaults = field(default_factory=SearchDefaults)
 
@@ -105,7 +105,9 @@ def load_config(path: Path | None = None) -> Config:
     obsidian_vaults = [_expand_path(v) for v in data.get("obsidian_vaults", [])]
     obsidian_exclude_folders = data.get("obsidian_exclude_folders", [])
     calibre_libraries = [_expand_path(v) for v in data.get("calibre_libraries", [])]
-    git_repos = [_expand_path(r) for r in data.get("git_repos", [])]
+    code_groups: dict[str, list[Path]] = {}
+    for group_name, paths in data.get("code_groups", {}).items():
+        code_groups[group_name] = [_expand_path(p) for p in paths]
     disabled_collections = set(data.get("disabled_collections", []))
 
     config = Config(
@@ -136,7 +138,7 @@ def load_config(path: Path | None = None) -> Config:
                 ),
             )
         ),
-        git_repos=git_repos,
+        code_groups=code_groups,
         disabled_collections=disabled_collections,
         search_defaults=search_defaults,
     )

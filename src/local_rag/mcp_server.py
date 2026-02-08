@@ -53,10 +53,11 @@ def create_server() -> FastMCP:
           Metadata: feed_name, url, date.
           Useful filters: date_from/date_to.
 
-        **Git repositories** (code) — Indexed git repos, one collection per repo.
+        **Code groups** (code) — Groups of git repos indexed together by topic or org.
+          Each group is a collection containing code from one or more repos.
           Source types: code.
           Metadata: language, symbol_name, symbol_type, start_line.
-          Useful filters: collection=<repo-name>, or collection=code for all repos.
+          Useful filters: collection=<group-name>, or collection=code for all code groups.
 
         **Project folders** (project) — User-created document collections.
           Source types: vary by content (markdown, pdf, docx, etc.).
@@ -65,15 +66,17 @@ def create_server() -> FastMCP:
         ## Collection filtering
 
         The `collection` parameter accepts either a collection name or a collection type:
-        - Name (e.g., "obsidian", "email", "my-project") — searches that specific collection.
+        - Name (e.g., "obsidian", "email", "rustyquill", "terraform") — searches that specific collection.
         - Type ("system", "project", "code") — searches all collections of that type.
+          Use "code" to search across all code groups at once.
 
         ## Examples
 
         - Search everything: query="kubernetes deployment strategy"
         - Search emails from someone: query="invoice", sender="john@example.com"
-        - Search a specific repo: query="authentication middleware", collection="my-api"
-        - Search all code repos: query="database connection pool", collection="code"
+        - Search a code group: query="authentication middleware", collection="rustyquill"
+        - Search all code groups: query="database connection pool", collection="code"
+        - Search cross-cutting group: query="module structure", collection="terraform"
         - Search books by author: query="machine learning", author="Bishop"
         - Search PDFs in Obsidian: query="tax return", collection="obsidian", source_type="pdf"
         - Search recent emails: query="project update", sender="boss", date_from="2025-01-01"
@@ -123,7 +126,10 @@ def create_server() -> FastMCP:
 
     @mcp.tool()
     def rag_list_collections() -> list[dict[str, Any]]:
-        """List all available collections with source file counts, chunk counts, and metadata."""
+        """List all available collections with source file counts, chunk counts, and metadata.
+
+        Collections of type 'code' represent code groups that may contain multiple git repos.
+        """
         config = load_config()
         conn = get_connection(config)
         init_db(conn, config)
@@ -157,18 +163,21 @@ def create_server() -> FastMCP:
     def rag_index(collection: str, path: str | None = None) -> dict[str, Any]:
         """Trigger indexing for a collection.
 
-        For 'obsidian' and 'email', uses configured paths.
+        For system collections ('obsidian', 'email', 'calibre', 'rss'), uses configured paths.
+        For code groups (matching a key in config code_groups), indexes all repos in that group.
         For project collections, a path argument is required.
 
         Args:
-            collection: Collection name ('obsidian', 'email', or a project name).
-            path: Path to index (required for project collections).
+            collection: Collection name ('obsidian', 'email', 'calibre', 'rss', a code group
+                name, or a project name).
+            path: Path to index (required for project collections, or to add a single repo
+                to a code group).
         """
         from pathlib import Path as P
 
         from local_rag.indexers.calibre_indexer import CalibreIndexer
         from local_rag.indexers.email_indexer import EmailIndexer
-        from local_rag.indexers.git_indexer import GitRepoIndexer, _is_git_repo, _parse_watermark
+        from local_rag.indexers.git_indexer import GitRepoIndexer
         from local_rag.indexers.obsidian import ObsidianIndexer
         from local_rag.indexers.project import ProjectIndexer
         from local_rag.indexers.rss_indexer import RSSIndexer
@@ -178,46 +187,47 @@ def create_server() -> FastMCP:
         init_db(conn, config)
 
         try:
+            if not config.is_collection_enabled(collection):
+                return {"error": f"Collection '{collection}' is disabled in config."}
+
             if collection == "obsidian":
-                if not config.is_collection_enabled("obsidian"):
-                    return {"error": "Collection 'obsidian' is disabled in config."}
                 indexer = ObsidianIndexer(config.obsidian_vaults, config.obsidian_exclude_folders)
+                result = indexer.index(conn, config)
             elif collection == "email":
-                if not config.is_collection_enabled("email"):
-                    return {"error": "Collection 'email' is disabled in config."}
                 indexer = EmailIndexer(str(config.emclient_db_path))
+                result = indexer.index(conn, config)
             elif collection == "calibre":
-                if not config.is_collection_enabled("calibre"):
-                    return {"error": "Collection 'calibre' is disabled in config."}
                 indexer = CalibreIndexer(config.calibre_libraries)
+                result = indexer.index(conn, config)
             elif collection == "rss":
-                if not config.is_collection_enabled("rss"):
-                    return {"error": "Collection 'rss' is disabled in config."}
                 indexer = RSSIndexer(str(config.netnewswire_db_path))
+                result = indexer.index(conn, config)
+            elif collection in config.code_groups:
+                # Code group — index all repos in this group
+                total_indexed = 0
+                total_skipped = 0
+                total_errors = 0
+                total_found = 0
+                for repo_path in config.code_groups[collection]:
+                    idx = GitRepoIndexer(repo_path, collection_name=collection)
+                    r = idx.index(conn, config)
+                    total_indexed += r.indexed
+                    total_skipped += r.skipped
+                    total_errors += r.errors
+                    total_found += r.total_found
+                return {
+                    "collection": collection,
+                    "indexed": total_indexed,
+                    "skipped": total_skipped,
+                    "errors": total_errors,
+                    "total_found": total_found,
+                }
+            elif path:
+                indexer = ProjectIndexer(collection, [P(path)])
+                result = indexer.index(conn, config)
             else:
-                # Check if this is an existing git repo collection
-                row = conn.execute(
-                    "SELECT description FROM collections WHERE name = ?",
-                    (collection,),
-                ).fetchone()
-                watermark = _parse_watermark(row["description"] if row else None)
+                return {"error": f"Unknown collection '{collection}'. Provide a path for project indexing."}
 
-                if not config.is_collection_enabled(collection):
-                    return {"error": f"Collection '{collection}' is disabled in config."}
-
-                if watermark:
-                    # Existing git repo collection — re-index from stored repo path
-                    repo_path_str, _ = watermark
-                    indexer = GitRepoIndexer(P(repo_path_str), collection_name=collection)
-                elif path and P(path).is_dir() and _is_git_repo(P(path)):
-                    # New git repo collection
-                    indexer = GitRepoIndexer(P(path), collection_name=collection)
-                elif path:
-                    indexer = ProjectIndexer(collection, [P(path)])
-                else:
-                    return {"error": f"Path required for project collection '{collection}'."}
-
-            result = indexer.index(conn, config)
             return {
                 "collection": collection,
                 "indexed": result.indexed,

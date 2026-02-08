@@ -21,7 +21,8 @@ uv run local-rag index obsidian
 uv run local-rag index email
 uv run local-rag index calibre
 uv run local-rag index rss
-uv run local-rag index repo ~/Repository/my-project
+uv run local-rag index group rustyquill
+uv run local-rag index group                    # all groups
 uv run local-rag index project "Project Alpha" ~/Documents/project-alpha-docs/
 
 # Search
@@ -44,7 +45,7 @@ flowchart LR
         EM["eM Client<br/>SQLite"]
         CAL["Calibre<br/>SQLite"]
         NNW["NetNewsWire<br/>SQLite"]
-        GIT["Git repos<br/>tree-sitter"]
+        GIT["Code groups<br/>tree-sitter"]
         PRJ["Project docs<br/>any folder"]
     end
 
@@ -74,7 +75,7 @@ flowchart LR
 
 ### Core Concepts
 
-**Collections**: Every indexed source belongs to a collection. System collections ("obsidian", "email", "calibre", "rss") have dedicated parsers. User collections are created for git repos and project folders. Search can target a specific collection or search across all of them.
+**Collections**: Every indexed source belongs to a collection. System collections ("obsidian", "email", "calibre", "rss") have dedicated parsers. Code groups are collections of type "code" that contain one or more git repos grouped by org or topic. Project folders create project-type collections. Search can target a specific collection or search across all of them.
 
 **Hybrid search**: Every query runs both vector similarity search (semantic) and FTS5 full-text search (keyword). Results are merged using Reciprocal Rank Fusion (RRF). This ensures that both "what does this mean" and "find the exact phrase" queries work well.
 
@@ -90,7 +91,7 @@ flowchart LR
 | **eM Client** | `email` | `index email` | SQLite databases (read-only) — subject, body, sender, recipients, date, folder |
 | **Calibre** | `calibre` | `index calibre` | SQLite metadata.db + book files (read-only) — EPUB/PDF content with author, tags, series metadata |
 | **NetNewsWire** | `rss` | `index rss` | SQLite databases (read-only) — RSS article title, author, content, feed name |
-| **Git Repos** | repo name | `index repo PATH` | Git-tracked files — tree-sitter structural parsing, respects .gitignore |
+| **Code Groups** | group name | `index group [NAME]` | Git repos grouped by org/topic — tree-sitter structural parsing, respects .gitignore |
 | **Project Docs** | user name | `index project NAME PATH` | Any folder — files dispatched to correct parser by extension |
 
 ---
@@ -245,7 +246,7 @@ local-rag index obsidian [--vault PATH]...       # Index Obsidian vaults (from c
 local-rag index email                             # Index eM Client emails
 local-rag index calibre [--library PATH]...       # Index Calibre ebook libraries
 local-rag index rss                               # Index NetNewsWire RSS articles
-local-rag index repo [PATH] [--name NAME]         # Index git repository (or all from config)
+local-rag index group [NAME]                      # Index code group(s) from config
 local-rag index project "Name" PATH [PATH]...     # Index docs into a named project
 local-rag index all                               # Index all configured sources at once
 
@@ -299,10 +300,10 @@ Config file location: `~/.local-rag/config.json`
     "~/CalibreLibrary"
   ],
   "netnewswire_db_path": "~/Library/Containers/com.ranchero.NetNewsWire-Evergreen/Data/Library/Application Support/NetNewsWire/Accounts",
-  "git_repos": [
-    "~/Repository/my-project",
-    "~/Repository/another-repo"
-  ],
+  "code_groups": {
+    "my-org": ["~/Repository/my-org/repo1", "~/Repository/my-org/repo2"],
+    "terraform": ["~/Repository/my-org/tf-infra", "~/Repository/other-org/tf-modules"]
+  },
   "disabled_collections": [],
   "search_defaults": {
     "top_k": 10,
@@ -354,7 +355,7 @@ For **Claude Desktop**, add to `~/Library/Application Support/Claude/claude_desk
 - **Graceful error handling.** If Ollama is not running, print a clear error. If a PDF has no extractable text, warn and skip. Never crash mid-index — log errors and continue.
 - **Search always returns source attribution.** Every result includes the collection name, source file path, and chunk context so the user can trace back to the original document.
 - **Read-only access to external databases.** eM Client, Calibre, and NetNewsWire databases are always opened in SQLite read-only mode to prevent accidental writes.
-- **Collections can be disabled.** Add collection names to `disabled_collections` in config to stop indexing without deleting existing data. Works with any collection name: system collections (`obsidian`, `email`, `calibre`, `rss`) or user-created ones (repo names, project names).
+- **Collections can be disabled.** Add collection names to `disabled_collections` in config to stop indexing without deleting existing data. Works with any collection name: system collections (`obsidian`, `email`, `calibre`, `rss`) or user-created ones (code group names, project names).
 
 ---
 

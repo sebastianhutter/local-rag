@@ -16,10 +16,16 @@
         "~/CalibreLibrary"
     ],
     "netnewswire_db_path": "~/Library/Containers/com.ranchero.NetNewsWire-Evergreen/Data/Library/Application Support/NetNewsWire/Accounts",
-    "git_repos": [
-        "~/Repository/my-project",
-        "~/Repository/another-repo"
-    ],
+    "code_groups": {
+        "my-org": [
+            "~/Repository/my-org/repo1",
+            "~/Repository/my-org/repo2"
+        ],
+        "terraform": [
+            "~/Repository/my-org/tf-infra",
+            "~/Repository/other-org/tf-modules"
+        ]
+    },
     "disabled_collections": [],
     "search_defaults": {
         "top_k": 10,

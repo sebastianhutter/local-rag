@@ -206,41 +206,54 @@ def _code_blocks_to_chunks(
     return chunks
 
 
-def _parse_watermark(description: str | None) -> tuple[str, str] | None:
-    """Parse a git watermark from a collection description.
+def _parse_watermarks(description: str | None) -> dict[str, str]:
+    """Parse git watermarks from a collection description.
 
-    Format: "git:{repo_path}:{commit_sha}"
+    Supports two formats:
+    - New JSON dict: {"repo_path_1": "sha_1", "repo_path_2": "sha_2"}
+    - Legacy single: "git:{repo_path}:{commit_sha}"
 
     Returns:
-        Tuple of (repo_path, commit_sha), or None if not a valid watermark.
+        Dict mapping repo path strings to commit SHAs. Empty dict if no watermarks.
     """
-    if not description or not description.startswith(_WATERMARK_PREFIX):
-        return None
-    parts = description[len(_WATERMARK_PREFIX) :].rsplit(":", 1)
-    if len(parts) != 2:
-        return None
-    return parts[0], parts[1]
+    if not description:
+        return {}
+
+    # Try JSON format first
+    if description.startswith("{"):
+        try:
+            data = json.loads(description)
+            if isinstance(data, dict):
+                return data
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # Legacy format: "git:{repo_path}:{commit_sha}"
+    if description.startswith(_WATERMARK_PREFIX):
+        parts = description[len(_WATERMARK_PREFIX):].rsplit(":", 1)
+        if len(parts) == 2:
+            return {parts[0]: parts[1]}
+
+    return {}
 
 
-def _make_watermark(repo_path: Path, commit_sha: str) -> str:
-    """Create a watermark string for storing in collection description."""
-    return f"{_WATERMARK_PREFIX}{repo_path}:{commit_sha}"
+def _make_watermarks(watermarks: dict[str, str]) -> str:
+    """Serialize watermarks dict to JSON for storing in collection description."""
+    return json.dumps(watermarks)
 
 
 class GitRepoIndexer(BaseIndexer):
     """Indexes a git repository using tree-sitter for code parsing."""
 
-    def __init__(self, repo_path: Path, collection_name: str | None = None) -> None:
+    def __init__(self, repo_path: Path, collection_name: str) -> None:
         """Initialize the git repo indexer.
 
         Args:
             repo_path: Path to the git repository root.
-            collection_name: Optional collection name. Defaults to the repo directory name.
+            collection_name: Collection name (the code group name).
         """
         self.repo_path = repo_path.resolve()
-        self.collection_name = collection_name or (
-            f"git-{self.repo_path.parent.name}-{self.repo_path.name}"
-        )
+        self.collection_name = collection_name
 
     def index(
         self, conn: sqlite3.Connection, config: Config, force: bool = False
@@ -264,18 +277,19 @@ class GitRepoIndexer(BaseIndexer):
 
         collection_id = get_or_create_collection(conn, self.collection_name, "code")
 
-        # Check for existing watermark
+        # Check for existing watermarks (multi-repo dict)
         row = conn.execute(
             "SELECT description FROM collections WHERE id = ?", (collection_id,)
         ).fetchone()
 
-        watermark = _parse_watermark(row["description"] if row else None)
+        watermarks = _parse_watermarks(row["description"] if row else None)
+        repo_key = str(self.repo_path)
+        old_sha = watermarks.get(repo_key)
 
         files_to_index: list[str]
         files_to_delete: list[str] = []
 
-        if not force and watermark:
-            old_repo_path, old_sha = watermark
+        if not force and old_sha:
             if old_sha == head_sha:
                 logger.info("No new commits since last index (SHA: %s)", head_sha[:12])
                 return IndexResult(total_found=0, skipped=0)
@@ -338,11 +352,11 @@ class GitRepoIndexer(BaseIndexer):
                 logger.error("Error indexing %s: %s", rel_path, e)
                 errors += 1
 
-        # Update watermark
-        watermark_str = _make_watermark(self.repo_path, head_sha)
+        # Update watermark for this repo in the shared dict
+        watermarks[repo_key] = head_sha
         conn.execute(
             "UPDATE collections SET description = ? WHERE id = ?",
-            (watermark_str, collection_id),
+            (_make_watermarks(watermarks), collection_id),
         )
         conn.commit()
 
