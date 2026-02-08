@@ -117,7 +117,9 @@ def _should_exclude(relative_path: str) -> bool:
     for pattern in _EXCLUDE_PATTERNS:
         if pattern.endswith("/"):
             # Directory pattern
-            if f"/{pattern}" in f"/{relative_path}" or relative_path.startswith(pattern):
+            if f"/{pattern}" in f"/{relative_path}" or relative_path.startswith(
+                pattern
+            ):
                 return True
         else:
             # File pattern
@@ -236,7 +238,9 @@ class GitRepoIndexer(BaseIndexer):
             collection_name: Optional collection name. Defaults to the repo directory name.
         """
         self.repo_path = repo_path.resolve()
-        self.collection_name = collection_name or self.repo_path.name
+        self.collection_name = collection_name or (
+            f"git-{self.repo_path.parent.name}-{self.repo_path.name}"
+        )
 
     def index(
         self, conn: sqlite3.Connection, config: Config, force: bool = False
@@ -258,9 +262,7 @@ class GitRepoIndexer(BaseIndexer):
         head_sha = _get_head_sha(self.repo_path)
         logger.info("Git repo: %s (HEAD: %s)", self.repo_path, head_sha[:12])
 
-        collection_id = get_or_create_collection(
-            conn, self.collection_name, "project"
-        )
+        collection_id = get_or_create_collection(conn, self.collection_name, "project")
 
         # Check for existing watermark
         row = conn.execute(
@@ -309,10 +311,7 @@ class GitRepoIndexer(BaseIndexer):
             self._delete_source(conn, collection_id, source_path)
 
         # Filter to supported code files
-        indexable = [
-            f for f in files_to_index
-            if self._should_index(f)
-        ]
+        indexable = [f for f in files_to_index if self._should_index(f)]
 
         total_found = len(indexable)
         indexed = 0
