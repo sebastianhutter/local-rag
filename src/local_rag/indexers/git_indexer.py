@@ -835,6 +835,23 @@ class GitRepoIndexer(BaseIndexer):
 
         commits = _get_commits_since(self.repo_path, since_sha, months)
 
+        # Filter out blacklisted commits by subject prefix
+        if config.git_commit_subject_blacklist and commits:
+            before_count = len(commits)
+            commits = [
+                c
+                for c in commits
+                if not any(
+                    c.subject.startswith(prefix)
+                    for prefix in config.git_commit_subject_blacklist
+                )
+            ]
+            filtered = before_count - len(commits)
+            if filtered:
+                logger.info(
+                    "Filtered %d commit(s) matching subject blacklist", filtered
+                )
+
         if not commits:
             logger.info("No new commits to index for %s", self.repo_path)
             return IndexResult(total_found=0, skipped=0)

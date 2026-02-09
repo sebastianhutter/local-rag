@@ -307,6 +307,9 @@ Config file location: `~/.local-rag/config.json`
   },
   "disabled_collections": [],
   "git_history_in_months": 6,
+  "git_commit_subject_blacklist": [
+    "Automated show, episode and transcript sync"
+  ],
   "search_defaults": {
     "top_k": 10,
     "rrf_k": 60,
