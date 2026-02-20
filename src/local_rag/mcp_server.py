@@ -361,8 +361,15 @@ def create_server() -> FastMCP:
     def rag_collection_info(collection: str) -> dict[str, Any]:
         """Get detailed information about a specific collection.
 
+        Returns source count, chunk count, source type breakdown, last indexed
+        timestamp, and a sample of document titles for the given collection.
+
+        Use rag_list_collections() first to discover available collection names.
+
         Args:
-            collection: The collection name.
+            collection: The collection name (required). Must be an existing collection,
+                e.g. 'obsidian', 'email', 'calibre', 'rss', a code group name, or a
+                project name. Use rag_list_collections() to see all available names.
         """
         config = load_config()
         conn = get_connection(config)
