@@ -2044,3 +2044,216 @@ trait Foo {
         doc = parse_code_file(scala_file, "scala", "empty.scala")
         assert doc is not None
         assert len(doc.blocks) == 0
+
+
+class TestElixirParsing:
+    """Tests for Elixir code parsing via parse_code_file."""
+
+    # A comprehensive Elixir source file covering all major declaration types
+    ELIXIR_SOURCE = """\
+defmodule MyApp.User do
+  @moduledoc "User module"
+
+  defstruct [:name, :email]
+
+  def new(name, email) do
+    %__MODULE__{name: name, email: email}
+  end
+
+  defp validate(user) do
+    user.name != nil
+  end
+
+  defmacro is_admin(user) do
+    quote do
+      unquote(user).role == :admin
+    end
+  end
+end
+
+defprotocol Printable do
+  def to_string(data)
+end
+
+defimpl Printable, for: MyApp.User do
+  def to_string(user), do: user.name
+end
+"""
+
+    def _parse_elixir(self, tmp_path: Path, source: str | None = None) -> list:
+        """Write Elixir source to a temp file and parse it, returning blocks."""
+        ex_file = tmp_path / "test.ex"
+        ex_file.write_text(source if source is not None else self.ELIXIR_SOURCE)
+        doc = parse_code_file(ex_file, "elixir", "test.ex")
+        assert doc is not None, "parse_code_file returned None"
+        return doc.blocks
+
+    def test_parses_without_error(self, tmp_path: Path) -> None:
+        """Elixir source parses successfully and returns a CodeDocument."""
+        ex_file = tmp_path / "test.ex"
+        ex_file.write_text(self.ELIXIR_SOURCE)
+        doc = parse_code_file(ex_file, "elixir", "test.ex")
+        assert doc is not None
+        assert doc.language == "elixir"
+        assert doc.file_path == "test.ex"
+
+    def test_block_count(self, tmp_path: Path) -> None:
+        """Elixir source produces the expected number of structural blocks.
+
+        Expected blocks:
+        1. defmodule MyApp.User (module)
+        2. defprotocol Printable (protocol)
+        3. defimpl Printable (impl)
+        """
+        blocks = self._parse_elixir(tmp_path)
+        assert len(blocks) == 3
+
+    def test_defmodule_symbol_name(self, tmp_path: Path) -> None:
+        """A defmodule declaration extracts the module name."""
+        blocks = self._parse_elixir(tmp_path)
+        mod_block = blocks[0]
+        assert mod_block.symbol_name == "MyApp.User"
+
+    def test_defmodule_symbol_type(self, tmp_path: Path) -> None:
+        """A defmodule declaration is classified as symbol_type 'module'."""
+        blocks = self._parse_elixir(tmp_path)
+        mod_block = blocks[0]
+        assert mod_block.symbol_type == "module"
+
+    def test_defmodule_contains_functions(self, tmp_path: Path) -> None:
+        """The defmodule block text contains nested def/defp/defmacro."""
+        blocks = self._parse_elixir(tmp_path)
+        mod_block = blocks[0]
+        assert "def new" in mod_block.text
+        assert "defp validate" in mod_block.text
+        assert "defmacro is_admin" in mod_block.text
+
+    def test_defprotocol_symbol_name(self, tmp_path: Path) -> None:
+        """A defprotocol declaration extracts the protocol name."""
+        blocks = self._parse_elixir(tmp_path)
+        proto_block = blocks[1]
+        assert proto_block.symbol_name == "Printable"
+
+    def test_defprotocol_symbol_type(self, tmp_path: Path) -> None:
+        """A defprotocol declaration is classified as symbol_type 'protocol'."""
+        blocks = self._parse_elixir(tmp_path)
+        proto_block = blocks[1]
+        assert proto_block.symbol_type == "protocol"
+
+    def test_defimpl_symbol_name(self, tmp_path: Path) -> None:
+        """A defimpl declaration extracts the implementation target name."""
+        blocks = self._parse_elixir(tmp_path)
+        impl_block = blocks[2]
+        assert impl_block.symbol_name == "Printable"
+
+    def test_defimpl_symbol_type(self, tmp_path: Path) -> None:
+        """A defimpl declaration is classified as symbol_type 'impl'."""
+        blocks = self._parse_elixir(tmp_path)
+        impl_block = blocks[2]
+        assert impl_block.symbol_type == "impl"
+
+    def test_start_end_lines_1_based(self, tmp_path: Path) -> None:
+        """start_line and end_line use 1-based line numbers."""
+        blocks = self._parse_elixir(tmp_path)
+        for block in blocks:
+            assert block.start_line >= 1
+            assert block.end_line >= block.start_line
+
+    def test_file_path_propagated(self, tmp_path: Path) -> None:
+        """The relative file_path is propagated to all blocks."""
+        blocks = self._parse_elixir(tmp_path)
+        for block in blocks:
+            assert block.file_path == "test.ex"
+
+    def test_language_set_on_blocks(self, tmp_path: Path) -> None:
+        """All blocks have language set to 'elixir'."""
+        blocks = self._parse_elixir(tmp_path)
+        for block in blocks:
+            assert block.language == "elixir"
+
+    def test_standalone_def(self, tmp_path: Path) -> None:
+        """A top-level def (outside defmodule) is split as a function."""
+        source = """\
+def greet(name) do
+  "Hello, #{name}"
+end
+"""
+        blocks = self._parse_elixir(tmp_path, source)
+        assert len(blocks) == 1
+        assert blocks[0].symbol_name == "greet"
+        assert blocks[0].symbol_type == "function"
+
+    def test_standalone_defp(self, tmp_path: Path) -> None:
+        """A top-level defp is split as a private function."""
+        source = """\
+defp helper(x) do
+  x + 1
+end
+"""
+        blocks = self._parse_elixir(tmp_path, source)
+        assert len(blocks) == 1
+        assert blocks[0].symbol_name == "helper"
+        assert blocks[0].symbol_type == "function"
+
+    def test_standalone_defmacro(self, tmp_path: Path) -> None:
+        """A top-level defmacro is split as a macro."""
+        source = """\
+defmacro my_macro(expr) do
+  quote do
+    unquote(expr)
+  end
+end
+"""
+        blocks = self._parse_elixir(tmp_path, source)
+        assert len(blocks) == 1
+        assert blocks[0].symbol_name == "my_macro"
+        assert blocks[0].symbol_type == "macro"
+
+    def test_non_structural_calls_in_top_level(self, tmp_path: Path) -> None:
+        """Non-structural calls like use/import/require go into top-level blocks."""
+        source = """\
+use GenServer
+import Enum
+require Logger
+
+defmodule MyApp do
+end
+"""
+        blocks = self._parse_elixir(tmp_path, source)
+        # Should have a top-level block for use/import/require, then defmodule
+        mod_blocks = [b for b in blocks if b.symbol_type == "module"]
+        top_blocks = [b for b in blocks if b.symbol_type == "module_top"]
+        assert len(mod_blocks) == 1
+        assert len(top_blocks) == 1
+        assert "use GenServer" in top_blocks[0].text
+
+    def test_empty_file_produces_no_blocks(self, tmp_path: Path) -> None:
+        """An empty .ex file produces no blocks."""
+        ex_file = tmp_path / "empty.ex"
+        ex_file.write_text("")
+        doc = parse_code_file(ex_file, "elixir", "empty.ex")
+        assert doc is not None
+        assert len(doc.blocks) == 0
+
+    def test_exs_file_parses(self, tmp_path: Path) -> None:
+        """An .exs file (Elixir script) parses correctly."""
+        exs_file = tmp_path / "test_helper.exs"
+        exs_file.write_text("ExUnit.start()\n")
+        doc = parse_code_file(exs_file, "elixir", "test_helper.exs")
+        assert doc is not None
+        assert doc.language == "elixir"
+        # Single non-structural call should become a module_top or file block
+        assert len(doc.blocks) >= 1
+
+    def test_defmodule_start_line(self, tmp_path: Path) -> None:
+        """The defmodule block starts on the correct line."""
+        blocks = self._parse_elixir(tmp_path)
+        mod_block = blocks[0]
+        assert mod_block.start_line == 1
+
+    def test_defmodule_end_line(self, tmp_path: Path) -> None:
+        """The defmodule block ends on the correct line (the 'end' keyword)."""
+        blocks = self._parse_elixir(tmp_path)
+        mod_block = blocks[0]
+        # defmodule MyApp.User starts at line 1, ends at line 19 (the 'end')
+        assert mod_block.end_line == 19

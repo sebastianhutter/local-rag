@@ -76,6 +76,8 @@ _CODE_EXTENSION_MAP: dict[str, str] = {
     ".dart": "dart",
     ".kt": "kotlin",
     ".php": "php",
+    ".ex": "elixir",
+    ".exs": "elixir",
 }
 
 # Filename-based language detection (no extension match)
@@ -172,11 +174,47 @@ _SPLIT_NODE_TYPES: dict[str, set[str]] = {
         "trait_declaration",
         "enum_declaration",
     },
+    "elixir": {"call"},  # filtered by _get_elixir_call_keyword in main loop
 }
 
 # Dart: node types that represent a signature which must be merged with the
 # immediately following ``function_body`` sibling to form a complete block.
 _DART_SIGNATURE_TYPES: set[str] = {"function_signature", "getter_signature"}
+
+# Elixir: keywords that indicate structural call nodes worth splitting on
+_ELIXIR_STRUCTURAL_KEYWORDS: set[str] = {
+    "defmodule",
+    "def",
+    "defp",
+    "defmacro",
+    "defprotocol",
+    "defimpl",
+}
+
+
+def _get_elixir_call_keyword(node) -> str | None:
+    """Return the structural keyword of an Elixir call node, or None.
+
+    In Elixir's tree-sitter grammar, all constructs (defmodule, def, defp,
+    defmacro, defprotocol, defimpl) are ``call`` nodes whose first child is
+    an ``identifier`` node with the keyword text.
+
+    Args:
+        node: A tree-sitter node of type ``call``.
+
+    Returns:
+        The keyword string (e.g. "defmodule", "def") if the first child is an
+        identifier matching a structural keyword, otherwise None.
+    """
+    if node.type != "call":
+        return None
+    for child in node.children:
+        if child.type == "identifier":
+            keyword = child.text.decode("utf-8", errors="replace")
+            if keyword in _ELIXIR_STRUCTURAL_KEYWORDS:
+                return keyword
+        break  # only check the first child
+    return None
 
 
 def get_supported_extensions() -> set[str]:
@@ -372,6 +410,42 @@ def _extract_symbol_name(node, language: str, source_bytes: bytes) -> str:
                 return child.text.decode("utf-8", errors="replace")
         return node.type
 
+    if language == "elixir":
+        # Elixir call nodes: the keyword is the first identifier child,
+        # the name is in the arguments child.
+        keyword = _get_elixir_call_keyword(node)
+        if keyword in ("defmodule", "defprotocol"):
+            # Name is an alias node inside arguments: defmodule MyApp.User do
+            for child in node.children:
+                if child.type == "arguments":
+                    for arg in child.children:
+                        if arg.type == "alias":
+                            return arg.text.decode("utf-8", errors="replace")
+            return node.type
+        if keyword == "defimpl":
+            # First alias in arguments: defimpl Printable, for: MyApp.User do
+            for child in node.children:
+                if child.type == "arguments":
+                    for arg in child.children:
+                        if arg.type == "alias":
+                            return arg.text.decode("utf-8", errors="replace")
+            return node.type
+        if keyword in ("def", "defp", "defmacro"):
+            # Function name is nested: arguments -> call -> identifier
+            for child in node.children:
+                if child.type == "arguments":
+                    for arg in child.children:
+                        if arg.type == "call":
+                            for gc in arg.children:
+                                if gc.type == "identifier":
+                                    return gc.text.decode("utf-8", errors="replace")
+                        # One-liner: def to_string(user), do: ...
+                        if arg.type == "identifier":
+                            return arg.text.decode("utf-8", errors="replace")
+            return node.type
+        # Non-structural call -- use fallback
+        return node.type
+
     if language == "zig":
         if node.type == "TestDecl":
             for child in node.children:
@@ -486,7 +560,7 @@ def _node_symbol_type(node_type: str, language: str, node: Node | None = None) -
         "type_definition": "type",  # Scala
         "given_definition": "given",  # Scala
         "block": "block",  # HCL
-        "Decl": "declaration",  # Zig — refined below for functions/types
+        "Decl": "declaration",  # Zig -- refined below for functions/types
         "TestDecl": "test",  # Zig
         "ComptimeDecl": "comptime",  # Zig
         "function_statement": "function",  # PowerShell (functions and filters)
@@ -571,6 +645,22 @@ def _node_symbol_type(node_type: str, language: str, node: Node | None = None) -
                             if mod_text == "data":
                                 return "data_class"
             return "class"
+
+    # Elixir: refine call node type based on the keyword identifier
+    if language == "elixir" and node_type == "call":
+        if node is not None:
+            keyword = _get_elixir_call_keyword(node)
+            keyword_type_map: dict[str, str] = {
+                "defmodule": "module",
+                "def": "function",
+                "defp": "function",
+                "defmacro": "macro",
+                "defprotocol": "protocol",
+                "defimpl": "impl",
+            }
+            if keyword is not None:
+                return keyword_type_map.get(keyword, "block")
+        return "block"
 
     return result
 
@@ -722,7 +812,15 @@ def parse_code_file(file_path: Path, language: str, relative_path: str) -> CodeD
             )
             dart_pending_signature = None
 
-        if child.type in split_types:
+        # Elixir: all constructs are `call` nodes, but only structural keywords
+        # (defmodule, def, defp, defmacro, defprotocol, defimpl) should be split.
+        # Non-structural calls (use, import, require, alias) accumulate into
+        # top-level blocks.
+        is_split = child.type in split_types
+        if language == "elixir" and child.type == "call":
+            is_split = _get_elixir_call_keyword(child) is not None
+
+        if is_split:
             # R: only split binary_operator when it assigns a function_definition;
             # non-function assignments (e.g. threshold <- 0.05) stay as top-level
             if language == "r" and child.type == "binary_operator":
