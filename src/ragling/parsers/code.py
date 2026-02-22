@@ -71,6 +71,8 @@ _CODE_EXTENSION_MAP: dict[str, str] = {
     ".lua": "lua",
     ".pl": "perl",
     ".pm": "perl",
+    ".dart": "dart",
+    ".kt": "kotlin",
 }
 
 # Filename-based language detection (no extension match)
@@ -135,7 +137,25 @@ _SPLIT_NODE_TYPES: dict[str, set[str]] = {
     "r": {"binary_operator"},
     "lua": {"function_declaration", "variable_declaration"},
     "perl": {"subroutine_declaration_statement", "package_statement"},
+    "dart": {
+        "class_definition",
+        "enum_declaration",
+        "mixin_declaration",
+        "extension_declaration",
+        "extension_type_declaration",
+        "type_alias",
+        # function_signature and getter_signature are handled specially in
+        # parse_code_file — they are merged with the following function_body
+        # sibling before being emitted as a block.
+        "function_signature",
+        "getter_signature",
+    },
+    "kotlin": {"class_declaration", "function_declaration", "object_declaration"},
 }
+
+# Dart: node types that represent a signature which must be merged with the
+# immediately following ``function_body`` sibling to form a complete block.
+_DART_SIGNATURE_TYPES: set[str] = {"function_signature", "getter_signature"}
 
 
 def get_supported_extensions() -> set[str]:
@@ -240,6 +260,16 @@ def _extract_symbol_name(node, language: str, source_bytes: bytes) -> str:
                 return child.text.decode("utf-8", errors="replace")
         return node.type
 
+    if language == "kotlin":
+        # Kotlin: class_declaration, function_declaration, object_declaration
+        # Name is in type_identifier (classes/objects) or simple_identifier (functions)
+        for child in node.children:
+            if child.type == "type_identifier":
+                return child.text.decode("utf-8", errors="replace")
+            if child.type == "simple_identifier":
+                return child.text.decode("utf-8", errors="replace")
+        return node.type
+
     if language in ("java", "csharp"):
         for child in node.children:
             if child.type == "identifier":
@@ -294,6 +324,24 @@ def _extract_symbol_name(node, language: str, source_bytes: bytes) -> str:
                     else:
                         return child.text.decode("utf-8", errors="replace")
             return node.type
+        return node.type
+
+    if language == "dart":
+        if node.type == "getter_signature":
+            # getter_signature: type_identifier, get, identifier
+            # We want the identifier AFTER the "get" keyword, not the return type.
+            for child in node.children:
+                if child.type == "identifier":
+                    return child.text.decode("utf-8", errors="replace")
+            return node.type
+        # For most Dart nodes (class_definition, enum_declaration, mixin_declaration,
+        # extension_declaration, extension_type_declaration, type_alias,
+        # function_signature), the first identifier child holds the name.
+        for child in node.children:
+            if child.type == "identifier":
+                return child.text.decode("utf-8", errors="replace")
+            if child.type == "type_identifier":
+                return child.text.decode("utf-8", errors="replace")
         return node.type
 
     if language == "zig":
@@ -402,6 +450,14 @@ def _node_symbol_type(node_type: str, language: str, node: Node | None = None) -
         "variable_declaration": "variable",  # Lua — refined below for function assignments
         "subroutine_declaration_statement": "subroutine",  # Perl
         "package_statement": "package",  # Perl
+        "object_declaration": "object",  # Kotlin
+        # Dart
+        "mixin_declaration": "mixin",
+        "extension_declaration": "extension",
+        "extension_type_declaration": "extension_type",
+        "type_alias": "type",
+        "function_signature": "function",
+        "getter_signature": "getter",
     }
     result = type_map.get(node_type, "block")
 
@@ -453,6 +509,24 @@ def _node_symbol_type(node_type: str, language: str, node: Node | None = None) -
                                 if ggc.type == "function_definition":
                                     return "function"
         return "variable"
+
+    # Kotlin: refine class_declaration based on keyword children
+    if language == "kotlin" and node_type == "class_declaration":
+        if node is not None:
+            child_types = {c.type for c in node.children}
+            if "interface" in child_types:
+                return "interface"
+            if "enum" in child_types:
+                return "enum"
+            # Check modifiers for data class
+            for child in node.children:
+                if child.type == "modifiers":
+                    for mod in child.children:
+                        if mod.type == "class_modifier":
+                            mod_text = (mod.text or b"").decode("utf-8", errors="replace")
+                            if mod_text == "data":
+                                return "data_class"
+            return "class"
 
     return result
 
@@ -538,12 +612,71 @@ def parse_code_file(file_path: Path, language: str, relative_path: str) -> CodeD
     # Zig: track pending `pub` visibility modifier to prepend to next Decl
     zig_pending_pub_line: int | None = None
 
-    for child in top_level_children:
+    # Dart: track pending signature node (function_signature / getter_signature)
+    # to merge with the following function_body sibling.
+    dart_pending_signature: dict | None = None
+
+    for i, child in enumerate(top_level_children):
         # Zig: `pub` is a separate sibling node before Decl — capture it
         if language == "zig" and child.type == "pub":
             _flush_top_level()
             zig_pending_pub_line = child.start_point.row + 1
             continue
+
+        # Dart: merge function_signature/getter_signature with following function_body
+        if language == "dart" and child.type in _DART_SIGNATURE_TYPES:
+            _flush_top_level()
+            dart_pending_signature = {
+                "node": child,
+                "text": (child.text or b"").decode("utf-8", errors="replace"),
+                "start_line": child.start_point.row + 1,
+                "end_line": child.end_point.row + 1,
+            }
+            continue
+
+        if language == "dart" and child.type == "function_body" and dart_pending_signature:
+            # Merge body with the pending signature
+            sig = dart_pending_signature
+            body_text = (child.text or b"").decode("utf-8", errors="replace")
+            merged_text = sig["text"] + " " + body_text
+            end_line = child.end_point.row + 1
+            sig_node = sig["node"]
+            symbol_name = _extract_symbol_name(sig_node, language, source_bytes)
+            symbol_type = _node_symbol_type(sig_node.type, language, sig_node)
+
+            doc.blocks.append(
+                CodeBlock(
+                    text=merged_text,
+                    language=language,
+                    symbol_name=symbol_name,
+                    symbol_type=symbol_type,
+                    start_line=sig["start_line"],
+                    end_line=end_line,
+                    file_path=relative_path,
+                )
+            )
+            dart_pending_signature = None
+            continue
+
+        # If we had a pending Dart signature but the next node isn't function_body,
+        # emit the signature alone (shouldn't normally happen, but handle gracefully)
+        if dart_pending_signature is not None:
+            sig = dart_pending_signature
+            sig_node = sig["node"]
+            symbol_name = _extract_symbol_name(sig_node, language, source_bytes)
+            symbol_type = _node_symbol_type(sig_node.type, language, sig_node)
+            doc.blocks.append(
+                CodeBlock(
+                    text=sig["text"],
+                    language=language,
+                    symbol_name=symbol_name,
+                    symbol_type=symbol_type,
+                    start_line=sig["start_line"],
+                    end_line=sig["end_line"],
+                    file_path=relative_path,
+                )
+            )
+            dart_pending_signature = None
 
         if child.type in split_types:
             # R: only split binary_operator when it assigns a function_definition;
@@ -606,6 +739,25 @@ def parse_code_file(file_path: Path, language: str, relative_path: str) -> CodeD
                 top_start_line = start
             top_end_line = end
             top_level_lines.append(node_text)
+
+    # Flush any remaining pending Dart signature
+    if dart_pending_signature is not None:
+        sig = dart_pending_signature
+        sig_node = sig["node"]
+        symbol_name = _extract_symbol_name(sig_node, language, source_bytes)
+        symbol_type = _node_symbol_type(sig_node.type, language, sig_node)
+        doc.blocks.append(
+            CodeBlock(
+                text=sig["text"],
+                language=language,
+                symbol_name=symbol_name,
+                symbol_type=symbol_type,
+                start_line=sig["start_line"],
+                end_line=sig["end_line"],
+                file_path=relative_path,
+            )
+        )
+        dart_pending_signature = None
 
     _flush_top_level()
 
