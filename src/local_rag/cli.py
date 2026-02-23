@@ -1,13 +1,16 @@
 """Click CLI entry point for local-rag."""
 
+import contextlib
 import json
 import logging
 import signal
 import sys
+from collections.abc import Callable, Generator
 from pathlib import Path
 
 import click
 from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn
 from rich.table import Table
 from rich.text import Text
 
@@ -89,6 +92,28 @@ def _check_collection_enabled(config, name: str) -> None:
             err=True,
         )
         sys.exit(1)
+
+
+@contextlib.contextmanager
+def _file_progress(label: str) -> Generator[Callable[[int, int, Path], None], None, None]:
+    """Context manager that yields a progress callback for file indexing."""
+    progress = Progress(
+        TextColumn("[bold]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("[dim]{task.fields[filename]}"),
+        console=console,
+        transient=True,
+    )
+    with progress:
+        task_id = progress.add_task(label, total=None, filename="")
+
+        def callback(current: int, total: int, file_path: Path) -> None:
+            progress.update(task_id, total=total, completed=current - 1, filename=file_path.name)
+
+        yield callback
+        # Ensure bar shows completion
+        progress.update(task_id, completed=progress.tasks[task_id].total)
 
 
 @index.command("obsidian")
@@ -177,18 +202,40 @@ def index_rss(force: bool) -> None:
 
 @index.command("project")
 @click.argument("name")
-@click.argument("paths", nargs=-1, required=True, type=click.Path(exists=True, path_type=Path))
+@click.argument("paths", nargs=-1, required=False, type=click.Path(exists=True, path_type=Path))
 @click.option("--force", is_flag=True, help="Force re-index all files.")
 def index_project(name: str, paths: tuple[Path, ...], force: bool) -> None:
-    """Index documents into a named project collection."""
+    """Index documents into a named project collection.
+
+    If PATHS are given, they are indexed and saved for future runs.
+    If omitted, re-indexes using the paths stored from a previous run.
+    """
     from local_rag.indexers.project import ProjectIndexer
 
     config = load_config()
     _check_collection_enabled(config, name)
     conn = _get_db(config)
     try:
-        indexer = ProjectIndexer(name, list(paths))
-        result = indexer.index(conn, config, force=force)
+        if paths:
+            project_paths = list(paths)
+        else:
+            # Look up stored paths from the database
+            row = conn.execute(
+                "SELECT paths FROM collections WHERE name = ? AND collection_type = 'project'",
+                (name,),
+            ).fetchone()
+            if not row or not row["paths"]:
+                click.echo(
+                    f"Error: No paths provided and no stored paths found for project '{name}'.\n"
+                    f"Usage: local-rag index project \"{name}\" /path/to/docs",
+                    err=True,
+                )
+                sys.exit(1)
+            project_paths = [Path(p) for p in json.loads(row["paths"])]
+
+        indexer = ProjectIndexer(name, project_paths)
+        with _file_progress(name) as progress_cb:
+            result = indexer.index(conn, config, force=force, progress_callback=progress_cb)
         _print_index_result(name, result)
     finally:
         conn.close()
@@ -275,6 +322,7 @@ def index_all(force: bool) -> None:
                 git_indexers.append(label)
 
     # Load project collections from the database
+    project_labels: list[str] = []
     project_rows = conn.execute(
         "SELECT name, paths FROM collections WHERE collection_type = 'project' AND paths IS NOT NULL"
     ).fetchall()
@@ -283,6 +331,7 @@ def index_all(force: bool) -> None:
         if config.is_collection_enabled(proj_name):
             proj_paths = [Path(p) for p in json.loads(row["paths"])]
             sources.append((proj_name, ProjectIndexer(proj_name, proj_paths)))
+            project_labels.append(proj_name)
 
     if not sources:
         click.echo("No sources configured. Set paths in ~/.local-rag/config.json.", err=True)
@@ -294,11 +343,15 @@ def index_all(force: bool) -> None:
 
     try:
         for label, indexer in sources:
-            click.echo(f"  {label}...")
             try:
                 if label in git_indexers:
+                    click.echo(f"  {label}...")
                     result = indexer.index(conn, config, force=force, index_history=True)
+                elif label in project_labels:
+                    with _file_progress(f"  {label}") as progress_cb:
+                        result = indexer.index(conn, config, force=force, progress_callback=progress_cb)
                 else:
+                    click.echo(f"  {label}...")
                     result = indexer.index(conn, config, force=force)
                 summary_rows.append((label, result.indexed, result.skipped, result.errors, result.total_found, None))
             except Exception as e:

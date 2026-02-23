@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -153,7 +154,11 @@ class ProjectIndexer(BaseIndexer):
         self.paths = paths
 
     def index(
-        self, conn: sqlite3.Connection, config: Config, force: bool = False
+        self,
+        conn: sqlite3.Connection,
+        config: Config,
+        force: bool = False,
+        progress_callback: Callable[[int, int, Path], None] | None = None,
     ) -> IndexResult:
         """Index all supported files into the project collection.
 
@@ -161,6 +166,8 @@ class ProjectIndexer(BaseIndexer):
             conn: SQLite database connection.
             config: Application configuration.
             force: If True, re-index all files regardless of change detection.
+            progress_callback: Optional callback invoked per file with
+                (current, total, file_path).
 
         Returns:
             IndexResult summarizing the indexing run.
@@ -182,7 +189,9 @@ class ProjectIndexer(BaseIndexer):
             self.collection_name,
         )
 
-        for file_path in files:
+        for i, file_path in enumerate(files, 1):
+            if progress_callback:
+                progress_callback(i, total_found, file_path)
             try:
                 was_indexed = self._index_file(
                     conn, config, file_path, collection_id, force
