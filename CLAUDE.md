@@ -125,8 +125,9 @@ The database lives at `~/.local-rag/rag.db` by default (configurable).
 CREATE TABLE collections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
-    collection_type TEXT NOT NULL DEFAULT 'project',  -- 'system' or 'project'
+    collection_type TEXT NOT NULL DEFAULT 'project',  -- 'system', 'project', or 'code'
     description TEXT,
+    paths TEXT,                               -- JSON array of source paths (used by project collections)
     created_at TEXT DEFAULT (datetime('now'))
 );
 

@@ -1,5 +1,6 @@
 """Click CLI entry point for local-rag."""
 
+import json
 import logging
 import signal
 import sys
@@ -236,14 +237,16 @@ def index_group(name: str | None, force: bool, history: bool) -> None:
 def index_all(force: bool) -> None:
     """Index all configured sources at once.
 
-    Indexes obsidian, email, calibre, rss, and code groups based on what
-    is configured in ~/.local-rag/config.json. Skips any source that
-    has no paths configured.
+    Indexes obsidian, email, calibre, rss, code groups, and project
+    collections. System sources and code groups come from
+    ~/.local-rag/config.json. Project collections are discovered from
+    the database (paths are saved when you first run 'index project').
     """
     from local_rag.indexers.calibre_indexer import CalibreIndexer
     from local_rag.indexers.email_indexer import EmailIndexer
     from local_rag.indexers.git_indexer import GitRepoIndexer
     from local_rag.indexers.obsidian import ObsidianIndexer
+    from local_rag.indexers.project import ProjectIndexer
     from local_rag.indexers.rss_indexer import RSSIndexer
 
     config = load_config()
@@ -270,6 +273,16 @@ def index_all(force: bool) -> None:
                 label = f"{group_name}/{repo_path.name}"
                 sources.append((label, GitRepoIndexer(repo_path, collection_name=group_name)))
                 git_indexers.append(label)
+
+    # Load project collections from the database
+    project_rows = conn.execute(
+        "SELECT name, paths FROM collections WHERE collection_type = 'project' AND paths IS NOT NULL"
+    ).fetchall()
+    for row in project_rows:
+        proj_name = row["name"]
+        if config.is_collection_enabled(proj_name):
+            proj_paths = [Path(p) for p in json.loads(row["paths"])]
+            sources.append((proj_name, ProjectIndexer(proj_name, proj_paths)))
 
     if not sources:
         click.echo("No sources configured. Set paths in ~/.local-rag/config.json.", err=True)

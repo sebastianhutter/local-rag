@@ -166,7 +166,8 @@ class ProjectIndexer(BaseIndexer):
             IndexResult summarizing the indexing run.
         """
         collection_id = get_or_create_collection(
-            conn, self.collection_name, "project"
+            conn, self.collection_name, "project",
+            paths=[str(p.resolve()) for p in self.paths],
         )
 
         files = _collect_files(self.paths)

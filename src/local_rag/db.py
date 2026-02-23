@@ -1,5 +1,6 @@
 """Database initialization, connection management, and migrations for local-rag."""
 
+import json
 import logging
 import sqlite3
 
@@ -9,7 +10,7 @@ from local_rag.config import Config
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def get_connection(config: Config) -> sqlite3.Connection:
@@ -52,6 +53,7 @@ def init_db(conn: sqlite3.Connection, config: Config) -> None:
             name TEXT NOT NULL UNIQUE,
             collection_type TEXT NOT NULL DEFAULT 'project',
             description TEXT,
+            paths TEXT,
             created_at TEXT DEFAULT (datetime('now'))
         );
 
@@ -164,6 +166,12 @@ def migrate(conn: sqlite3.Connection, config: Config) -> None:
         conn.commit()
         logger.info("Migration v2: reclassified git repo collections as 'code'")
 
+    if current_version < 3:
+        # Add paths column to collections for storing project source paths.
+        conn.execute("ALTER TABLE collections ADD COLUMN paths TEXT")
+        conn.commit()
+        logger.info("Migration v3: added paths column to collections")
+
     conn.execute(
         "UPDATE meta SET value = ? WHERE key = 'schema_version'",
         (str(SCHEMA_VERSION),),
@@ -177,6 +185,7 @@ def get_or_create_collection(
     name: str,
     collection_type: str = "project",
     description: str | None = None,
+    paths: list[str] | None = None,
 ) -> int:
     """Get or create a collection by name.
 
@@ -185,20 +194,31 @@ def get_or_create_collection(
         name: Collection name.
         collection_type: 'system', 'project', or 'code'.
         description: Optional description.
+        paths: Optional list of source paths (stored as JSON). If provided
+            on an existing collection, the stored paths are updated.
 
     Returns:
         The collection ID.
     """
+    paths_json = json.dumps(paths) if paths else None
+
     row = conn.execute("SELECT id FROM collections WHERE name = ?", (name,)).fetchone()
     if row:
+        if paths_json:
+            conn.execute(
+                "UPDATE collections SET paths = ? WHERE id = ?",
+                (paths_json, row["id"]),
+            )
+            conn.commit()
         return row["id"]
 
     cursor = conn.execute(
-        "INSERT INTO collections (name, collection_type, description) VALUES (?, ?, ?)",
-        (name, collection_type, description),
+        "INSERT INTO collections (name, collection_type, description, paths) "
+        "VALUES (?, ?, ?, ?)",
+        (name, collection_type, description, paths_json),
     )
     conn.commit()
-    collection_id = cursor.lastrowid
+    collection_id: int = cursor.lastrowid  # type: ignore[assignment]
     logger.info(
         "Created collection '%s' (type=%s, id=%d)", name, collection_type, collection_id
     )
