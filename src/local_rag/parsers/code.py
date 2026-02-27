@@ -57,11 +57,24 @@ _CODE_EXTENSION_MAP: dict[str, str] = {
     ".bash": "bash",
     ".yaml": "yaml",
     ".yml": "yaml",
+    ".json": "json",
+    ".txt": "plaintext",
+    ".csv": "plaintext",
+    ".md": "markdown",
+    ".rst": "plaintext",
+    ".toml": "toml",
+    ".sql": "sql",
+    ".xml": "xml",
+    ".html": "html",
+    ".htm": "html",
+    ".css": "css",
+    ".scss": "scss",
 }
 
 # Filename-based language detection (no extension match)
 _CODE_FILENAME_MAP: dict[str, str] = {
     "Dockerfile": "dockerfile",
+    "Makefile": "make",
 }
 
 # Node types that trigger splitting per language
@@ -106,6 +119,16 @@ _SPLIT_NODE_TYPES: dict[str, set[str]] = {
     "bash": {"function_definition"},
     "yaml": set(),  # no structural splitting for YAML
     "dockerfile": set(),  # no structural splitting for Dockerfile
+    "json": set(),  # no structural splitting for JSON
+    "plaintext": set(),  # no tree-sitter parser, handled as raw text
+    "markdown": set(),  # no structural splitting for Markdown
+    "toml": set(),  # no structural splitting for TOML
+    "sql": set(),  # no structural splitting for SQL
+    "xml": set(),  # no structural splitting for XML
+    "html": set(),  # no structural splitting for HTML
+    "css": set(),  # no structural splitting for CSS
+    "scss": set(),  # no structural splitting for SCSS
+    "make": set(),  # no structural splitting for Makefile
 }
 
 
@@ -290,6 +313,31 @@ def parse_code_file(
         CodeDocument with parsed blocks, or None if parsing fails.
     """
     try:
+        source_bytes = file_path.read_bytes()
+    except OSError as e:
+        logger.error("Cannot read file %s: %s", file_path, e)
+        return None
+
+    # Plaintext files (txt, csv) have no tree-sitter grammar — treat as single block
+    if language == "plaintext":
+        full_text = source_bytes.decode("utf-8", errors="replace")
+        doc = CodeDocument(file_path=relative_path, language=language)
+        if full_text.strip():
+            line_count = full_text.count("\n") + 1
+            doc.blocks.append(
+                CodeBlock(
+                    text=full_text,
+                    language=language,
+                    symbol_name="(file)",
+                    symbol_type="module_top",
+                    start_line=1,
+                    end_line=line_count,
+                    file_path=relative_path,
+                )
+            )
+        return doc
+
+    try:
         from tree_sitter_language_pack import get_parser
     except ImportError:
         logger.error("tree-sitter-language-pack is not installed")
@@ -299,12 +347,6 @@ def parse_code_file(
         parser = get_parser(language)
     except Exception as e:
         logger.error("Unsupported language '%s': %s", language, e)
-        return None
-
-    try:
-        source_bytes = file_path.read_bytes()
-    except OSError as e:
-        logger.error("Cannot read file %s: %s", file_path, e)
         return None
 
     try:
