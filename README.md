@@ -16,7 +16,7 @@ local-rag indexes content from your local apps and files, then lets you search a
 | **eM Client** | Emails (subject, body, sender, recipients, date) |
 | **Calibre** | Ebook content and metadata (EPUB, PDF) |
 | **NetNewsWire** | RSS/Atom articles |
-| **Git repos** | Code files with structural parsing (Python, Go, TypeScript, Rust, Java, C, and more) |
+| **Git repos** | Code files with structural parsing (Python, Go, TypeScript, Rust, Java, C, and more), plus data/config files (JSON, YAML, TOML, SQL, Markdown, HTML, CSS, XML, Makefile, TXT, CSV) |
 | **Project folders** | Any folder of documents, dispatched to the right parser by file type |
 
 ## Prerequisites
@@ -68,9 +68,10 @@ uv run local-rag index calibre --library ~/CalibreLibrary
 # Index NetNewsWire RSS articles
 uv run local-rag index rss
 
-# Index a git repository
-uv run local-rag index repo ~/Repository/my-project
-uv run local-rag index repo  # indexes all repos from config
+# Index code groups (repos grouped by org/topic in config)
+uv run local-rag index group my-org            # index one group
+uv run local-rag index group                   # index all groups
+uv run local-rag index group my-org --history  # include commit history
 
 # Index a folder of documents into a named project
 uv run local-rag index project "Client X" ~/Documents/client-x-docs/
@@ -127,13 +128,13 @@ Once connected, Claude can search your indexed knowledge using the `rag_search` 
 ## CLI Reference
 
 ```
-local-rag index obsidian [--vault PATH] [--force]    Index Obsidian vault(s)
-local-rag index email [--force]                      Index eM Client emails
-local-rag index calibre [--library PATH] [--force]   Index Calibre ebook libraries
-local-rag index rss [--force]                        Index NetNewsWire RSS articles
-local-rag index repo [PATH] [--name NAME] [--force]  Index a git repository
-local-rag index project NAME PATH... [--force]       Index docs into a project
-local-rag index all [--force]                         Index all configured sources
+local-rag index obsidian [--vault PATH] [--force]      Index Obsidian vault(s)
+local-rag index email [--force]                        Index eM Client emails
+local-rag index calibre [--library PATH] [--force]     Index Calibre ebook libraries
+local-rag index rss [--force]                          Index NetNewsWire RSS articles
+local-rag index group [NAME] [--history] [--force]     Index code group(s) from config
+local-rag index project NAME [PATHS...] [--force]      Index docs into a project
+local-rag index all [--force]                          Index all configured sources
 
 local-rag search QUERY [options]                     Hybrid search across collections
   --collection NAME                                  Search within a specific collection
