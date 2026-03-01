@@ -41,6 +41,24 @@ const (
 	addrTypeCC   = 5
 )
 
+// parseDateTicks converts a raw date column value to .NET ticks (int64).
+// CAST(date AS INTEGER) in the query ensures go-sqlite3 returns int64,
+// but we handle other types defensively.
+func parseDateTicks(raw any) int64 {
+	if raw == nil {
+		return 0
+	}
+	switch v := raw.(type) {
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	default:
+		slog.Warn("unexpected date column type", "type", fmt.Sprintf("%T", raw), "value", raw)
+		return 0
+	}
+}
+
 // .NET epoch: 0001-01-01
 var dotnetEpoch = time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)
 
@@ -99,13 +117,13 @@ func ParseEmails(accountDir string, sinceDate string) ([]*EmailMessage, error) {
 		"addresses", len(addresses),
 	)
 
-	query := "SELECT id, folder, date, subject, messageId, preview FROM MailItems"
+	query := "SELECT id, folder, CAST(date AS INTEGER), subject, messageId, preview FROM MailItems"
 	var args []any
 
 	if sinceDate != "" {
 		ticks := isoToTicks(sinceDate)
 		if ticks > 0 {
-			query += " WHERE date > ?"
+			query += " WHERE CAST(date AS INTEGER) > ?"
 			args = append(args, ticks)
 		}
 	}
@@ -117,23 +135,25 @@ func ParseEmails(accountDir string, sinceDate string) ([]*EmailMessage, error) {
 	}
 	defer rows.Close()
 
-	var messages []*EmailMessage
+	messages := make([]*EmailMessage, 0)
 	var errorCount int
 
 	for rows.Next() {
 		var id int64
 		var folderID sql.NullInt64
-		var dateTicks sql.NullInt64
+		var dateRaw any
 		var subject, messageID sql.NullString
 		var preview sql.NullString
 
-		if err := rows.Scan(&id, &folderID, &dateTicks, &subject, &messageID, &preview); err != nil {
+		if err := rows.Scan(&id, &folderID, &dateRaw, &subject, &messageID, &preview); err != nil {
 			errorCount++
 			if errorCount <= 10 {
 				slog.Warn("error scanning email row", "err", err)
 			}
 			continue
 		}
+
+		dateTicks := parseDateTicks(dateRaw)
 
 		msg := rowToEmail(id, folderID, dateTicks, subject, messageID, preview,
 			folders, ftiContent, addresses)
@@ -146,12 +166,21 @@ func ParseEmails(accountDir string, sinceDate string) ([]*EmailMessage, error) {
 	return messages, rows.Err()
 }
 
+// ticksPerSecond is 10,000,000 (.NET ticks are 100-nanosecond intervals).
+const ticksPerSecond = 10_000_000
+
+// unixEpochTicks is the .NET ticks value at Unix epoch (1970-01-01).
+// Calculated as: (1970-1) * 365.2425 * 86400 * 10_000_000, but the exact
+// value from .NET is 621355968000000000.
+const unixEpochTicks int64 = 621_355_968_000_000_000
+
 func ticksToISO(ticks int64) string {
 	if ticks == 0 {
 		return ""
 	}
-	microseconds := ticks / 10
-	dt := dotnetEpoch.Add(time.Duration(microseconds) * time.Microsecond)
+	// Convert .NET ticks to Unix seconds to avoid time.Duration overflow.
+	unixSeconds := (ticks - unixEpochTicks) / ticksPerSecond
+	dt := time.Unix(unixSeconds, 0).UTC()
 	return dt.Format(time.RFC3339)
 }
 
@@ -166,8 +195,7 @@ func isoToTicks(isoDate string) int64 {
 	if err != nil {
 		return 0
 	}
-	delta := dt.Sub(dotnetEpoch)
-	return delta.Microseconds() * 10
+	return dt.Unix()*ticksPerSecond + unixEpochTicks
 }
 
 func stripQuotedReplies(text string) string {
@@ -313,7 +341,7 @@ func loadAddresses(conn *sql.DB) map[int64]map[string][]string {
 func rowToEmail(
 	id int64,
 	folderID sql.NullInt64,
-	dateTicks sql.NullInt64,
+	dateTicks int64,
 	subject, messageID sql.NullString,
 	preview sql.NullString,
 	folders map[int64]string,
@@ -328,10 +356,7 @@ func rowToEmail(
 	if messageID.Valid {
 		msgID = messageID.String
 	}
-	dateStr := ""
-	if dateTicks.Valid {
-		dateStr = ticksToISO(dateTicks.Int64)
-	}
+	dateStr := ticksToISO(dateTicks)
 
 	folder := ""
 	if folderID.Valid {
