@@ -29,7 +29,7 @@ type GUIConfig struct {
 	AutoStartMCP             bool `json:"auto_start_mcp"`
 	MCPPort                  int  `json:"mcp_port"`
 	AutoReindex              bool `json:"auto_reindex"`
-	AutoReindexIntervalHours int  `json:"auto_reindex_interval_hours"`
+	AutoReindexIntervalMinutes int  `json:"auto_reindex_interval_minutes"`
 	StartOnLogin             bool `json:"start_on_login"`
 }
 
@@ -131,9 +131,16 @@ func Load(path string) (*Config, error) {
 	if _, ok := raw["gui"]; ok {
 		var guiRaw map[string]json.RawMessage
 		if err := json.Unmarshal(raw["gui"], &guiRaw); err == nil {
+			// Migrate old hours field to minutes.
+			if hoursRaw, hasHours := guiRaw["auto_reindex_interval_hours"]; hasHours {
+				var hours int
+				if json.Unmarshal(hoursRaw, &hours) == nil && hours > 0 {
+					cfg.GUI.AutoReindexIntervalMinutes = hours * 60
+				}
+			}
 			if _, hasAutoReindex := guiRaw["auto_reindex"]; !hasAutoReindex {
 				// auto_reindex absent: derive from interval
-				if cfg.GUI.AutoReindexIntervalHours != 6 && cfg.GUI.AutoReindexIntervalHours > 0 {
+				if cfg.GUI.AutoReindexIntervalMinutes != 60 && cfg.GUI.AutoReindexIntervalMinutes > 0 {
 					cfg.GUI.AutoReindex = true
 				} else {
 					cfg.GUI.AutoReindex = false
@@ -225,7 +232,7 @@ func defaults() *Config {
 			AutoStartMCP:             true,
 			MCPPort:                  31123,
 			AutoReindex:              false,
-			AutoReindexIntervalHours: 6,
+			AutoReindexIntervalMinutes: 60,
 			StartOnLogin:             false,
 		},
 	}
