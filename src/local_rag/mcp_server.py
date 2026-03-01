@@ -95,9 +95,25 @@ def _build_obsidian_uri(source_path: str, vault_paths: list) -> str | None:
     return None
 
 
-def create_server() -> FastMCP:
-    """Create and configure the MCP server with all tools registered."""
-    mcp = FastMCP("local-rag", instructions="Local RAG system for searching personal knowledge.")
+def create_server(port: int | None = None) -> FastMCP:
+    """Create and configure the MCP server with all tools registered.
+
+    Args:
+        port: Port for SSE transport. If None, defaults to FastMCP's default (stdio).
+    """
+    from mcp.server.fastmcp.server import TransportSecuritySettings
+
+    kwargs: dict = {"instructions": "Local RAG system for searching personal knowledge."}
+    if port is not None:
+        kwargs["port"] = port
+        # Disable DNS rebinding protection for local SSE mode.
+        # This server only binds to 127.0.0.1 and is not exposed to
+        # the network, but bridges like npx mcp-remote may send
+        # unexpected Host headers that trigger false rejections.
+        kwargs["transport_security"] = TransportSecuritySettings(
+            enable_dns_rebinding_protection=False,
+        )
+    mcp = FastMCP("local-rag", **kwargs)
 
     @mcp.tool()
     def rag_search(

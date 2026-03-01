@@ -7,7 +7,10 @@ Also handles registration with Claude Desktop and Claude Code.
 import json
 import logging
 import signal
+import socket
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 from local_rag.config import Config
@@ -26,11 +29,22 @@ CLAUDE_DESKTOP_CONFIG = (
 )
 
 
+def _port_in_use(port: int) -> bool:
+    """Check if a TCP port is already in use."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", port))
+            return False
+        except OSError:
+            return True
+
+
 class MCPService:
     """Service for managing the MCP server subprocess lifecycle."""
 
     def __init__(self) -> None:
         self._process: subprocess.Popen | None = None
+        self._stderr_thread: threading.Thread | None = None
 
     def start(self, config: Config) -> None:
         """Start the MCP server as a subprocess.
@@ -42,17 +56,68 @@ class MCPService:
             logger.warning("MCP server is already running")
             return
 
-        cmd = ["uv", "run", "--directory", str(_PROJECT_DIR), "local-rag", "serve"]
-        if config.gui.mcp_transport == "sse" and config.gui.mcp_port:
-            cmd.extend(["--port", str(config.gui.mcp_port)])
+        port = config.gui.mcp_port
+
+        # Check for port conflict before starting
+        if _port_in_use(port):
+            logger.warning(
+                "Port %d is already in use, waiting for it to free up...", port
+            )
+            # Wait up to 5 seconds for the port to become available
+            for _ in range(10):
+                time.sleep(0.5)
+                if not _port_in_use(port):
+                    break
+            else:
+                logger.error(
+                    "Port %d still in use after waiting. "
+                    "Another process may be using it.",
+                    port,
+                )
+                return
+
+        cmd = [
+            "uv", "run", "--directory", str(_PROJECT_DIR),
+            "local-rag", "serve", "--port", str(port),
+        ]
 
         logger.info("Starting MCP server: %s", " ".join(cmd))
         self._process = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
-        logger.info("MCP server started (PID %d)", self._process.pid)
+
+        # Stream stderr in a background thread so pipe doesn't fill up
+        self._stderr_thread = threading.Thread(
+            target=self._read_stderr, daemon=True
+        )
+        self._stderr_thread.start()
+
+        # Give the process a moment to start (or fail)
+        time.sleep(1)
+        if self._process.poll() is not None:
+            logger.error(
+                "MCP server exited immediately (exit code %d)",
+                self._process.returncode,
+            )
+            self._process = None
+            return
+
+        logger.info("MCP server started (PID %d) on port %d", self._process.pid, port)
+
+    def _read_stderr(self) -> None:
+        """Read stderr from the subprocess and log it."""
+        proc = self._process
+        if not proc or not proc.stderr:
+            return
+        try:
+            for line in proc.stderr:
+                text = line.decode("utf-8", errors="replace").rstrip()
+                if text:
+                    logger.debug("MCP server: %s", text)
+        except (ValueError, OSError):
+            pass  # process died / pipe closed
 
     def stop(self) -> None:
         """Stop the MCP server subprocess gracefully."""
