@@ -71,8 +71,11 @@ func ParseArticles(accountDir string, sinceTS float64) ([]*Article, error) {
 	query := "SELECT articleID, feedID, title, contentHTML, contentText, url, externalURL, summary, datePublished FROM articles"
 	var args []any
 	if sinceTS > 0 {
-		query += " WHERE datePublished > ?"
-		args = append(args, sinceTS)
+		// datePublished may be stored as datetime strings or as numeric timestamps.
+		// Use datetime() to normalize both formats for comparison.
+		sinceTime := time.Unix(int64(sinceTS), 0).UTC().Format("2006-01-02 15:04:05")
+		query += " WHERE datetime(datePublished) > datetime(?)"
+		args = append(args, sinceTime)
 	}
 	query += " ORDER BY datePublished ASC"
 
@@ -82,22 +85,24 @@ func ParseArticles(accountDir string, sinceTS float64) ([]*Article, error) {
 	}
 	defer rows.Close()
 
-	var articles []*Article
+	articles := make([]*Article, 0)
 	var errorCount int
 
 	for rows.Next() {
 		var articleID, feedID string
 		var title, contentHTML, contentText, articleURL, externalURL, summary sql.NullString
-		var datePublished sql.NullFloat64
+		var datePublishedRaw any
 
 		if err := rows.Scan(&articleID, &feedID, &title, &contentHTML, &contentText,
-			&articleURL, &externalURL, &summary, &datePublished); err != nil {
+			&articleURL, &externalURL, &summary, &datePublishedRaw); err != nil {
 			errorCount++
 			if errorCount <= 10 {
 				slog.Warn("error scanning article row", "err", err)
 			}
 			continue
 		}
+
+		datePublished := parseDatePublished(datePublishedRaw)
 
 		article := rssRowToArticle(articleID, feedID, title, contentHTML, contentText,
 			articleURL, externalURL, summary, datePublished, feedIDMap, authorsMap)
@@ -108,6 +113,42 @@ func ParseArticles(accountDir string, sinceTS float64) ([]*Article, error) {
 
 	slog.Info("parsed articles", "count", len(articles), "errors", errorCount)
 	return articles, rows.Err()
+}
+
+// parseDatePublished converts the datePublished column value to a Unix timestamp.
+// go-sqlite3 may return time.Time, float64, int64, or string depending on the stored format.
+func parseDatePublished(raw any) float64 {
+	if raw == nil {
+		return 0
+	}
+	switch v := raw.(type) {
+	case time.Time:
+		return float64(v.Unix())
+	case float64:
+		return v
+	case int64:
+		return float64(v)
+	case string:
+		if v == "" {
+			return 0
+		}
+		// Try RFC3339 first, then common SQLite datetime formats.
+		for _, layout := range []string{
+			time.RFC3339,
+			"2006-01-02T15:04:05",
+			"2006-01-02 15:04:05",
+			"2006-01-02",
+		} {
+			if t, err := time.Parse(layout, v); err == nil {
+				return float64(t.Unix())
+			}
+		}
+		slog.Warn("unparseable datePublished string", "value", v)
+		return 0
+	default:
+		slog.Warn("unexpected datePublished type", "type", fmt.Sprintf("%T", raw), "value", raw)
+		return 0
+	}
 }
 
 func tsToISO(ts float64) string {
@@ -245,7 +286,7 @@ func loadRSSAuthors(conn *sql.DB) map[string][]string {
 func rssRowToArticle(
 	articleID, feedID string,
 	title, contentHTML, contentText, articleURL, externalURL, summary sql.NullString,
-	datePublished sql.NullFloat64,
+	datePublished float64,
 	feedIDMap map[string]feedInfo,
 	authorsMap map[string][]string,
 ) *Article {
@@ -261,10 +302,7 @@ func rssRowToArticle(
 		urlStr = externalURL.String
 	}
 
-	ts := 0.0
-	if datePublished.Valid {
-		ts = datePublished.Float64
-	}
+	ts := datePublished
 
 	// Body: prefer contentText, fallback to contentHTML, then summary.
 	body := ""

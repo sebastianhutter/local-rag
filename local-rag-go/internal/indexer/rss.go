@@ -71,9 +71,9 @@ func indexRSSAccount(conn *sql.DB, cfg *config.Config, collectionID int64, accou
 	result := &IndexResult{}
 	latestTS := 0.0
 
-	articles := parseRSSWithRetry(accountDir, sinceTS)
-	if articles == nil {
-		msg := fmt.Sprintf("failed to open NetNewsWire database in %s after retries", filepath.Base(accountDir))
+	articles, parseErr := parseRSSWithRetry(accountDir, sinceTS)
+	if parseErr != nil {
+		msg := fmt.Sprintf("failed to read NetNewsWire database in %s: %v", filepath.Base(accountDir), parseErr)
 		slog.Error(msg)
 		result.Errors = 1
 		result.ErrorMessages = append(result.ErrorMessages, msg)
@@ -91,6 +91,11 @@ func indexRSSAccount(conn *sql.DB, cfg *config.Config, collectionID int64, accou
 				title = "(no title)"
 			}
 			progress(result.TotalFound, totalArticles, title)
+		}
+
+		// Advance watermark for all articles we've seen, not just indexed ones.
+		if article.DatePublishedTS > latestTS {
+			latestTS = article.DatePublishedTS
 		}
 
 		if !force && isSourceExists(conn, collectionID, article.ArticleID) {
@@ -111,20 +116,16 @@ func indexRSSAccount(conn *sql.DB, cfg *config.Config, collectionID int64, accou
 
 		result.Indexed++
 		slog.Info("indexed article", "title", truncate(article.Title, 60), "chunks", count)
-
-		if article.DatePublishedTS > latestTS {
-			latestTS = article.DatePublishedTS
-		}
 	}
 
 	return result, latestTS
 }
 
-func parseRSSWithRetry(accountDir string, sinceTS float64) []*parser.Article {
+func parseRSSWithRetry(accountDir string, sinceTS float64) ([]*parser.Article, error) {
 	for attempt := 1; attempt <= maxLockRetries; attempt++ {
 		articles, err := parser.ParseArticles(accountDir, sinceTS)
 		if err == nil {
-			return articles
+			return articles, nil
 		}
 		errStr := strings.ToLower(err.Error())
 		if strings.Contains(errStr, "locked") || strings.Contains(errStr, "busy") {
@@ -133,13 +134,11 @@ func parseRSSWithRetry(accountDir string, sinceTS float64) []*parser.Article {
 				time.Sleep(lockRetryDelay)
 				continue
 			}
-			slog.Error("NetNewsWire database is locked after retries", "attempts", maxLockRetries)
-			return nil
+			return nil, fmt.Errorf("database locked after %d retries", maxLockRetries)
 		}
-		slog.Error("database error", "err", err)
-		return nil
+		return nil, err
 	}
-	return nil
+	return nil, fmt.Errorf("exhausted retries")
 }
 
 func indexSingleArticle(conn *sql.DB, cfg *config.Config, collectionID int64, article *parser.Article) (int, error) {

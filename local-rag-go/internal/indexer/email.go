@@ -79,9 +79,9 @@ func indexEmailAccount(conn *sql.DB, cfg *config.Config, collectionID int64, acc
 	result := &IndexResult{}
 	latestDate := ""
 
-	emails := parseEmailsWithRetry(accountDir, sinceDate)
-	if emails == nil {
-		msg := fmt.Sprintf("failed to open eM Client database in %s after retries", filepath.Base(accountDir))
+	emails, parseErr := parseEmailsWithRetry(accountDir, sinceDate)
+	if parseErr != nil {
+		msg := fmt.Sprintf("failed to read eM Client database in %s: %v", filepath.Base(accountDir), parseErr)
 		slog.Error(msg)
 		result.Errors = 1
 		result.ErrorMessages = append(result.ErrorMessages, msg)
@@ -99,6 +99,11 @@ func indexEmailAccount(conn *sql.DB, cfg *config.Config, collectionID int64, acc
 				subj = "(no subject)"
 			}
 			progress(result.TotalFound, totalEmails, subj)
+		}
+
+		// Advance watermark for all emails we've seen, not just indexed ones.
+		if email.Date > latestDate {
+			latestDate = email.Date
 		}
 
 		if !force && isSourceExists(conn, collectionID, email.MessageID) {
@@ -119,20 +124,16 @@ func indexEmailAccount(conn *sql.DB, cfg *config.Config, collectionID int64, acc
 
 		result.Indexed++
 		slog.Info("indexed email", "subject", truncate(email.Subject, 60), "chunks", count)
-
-		if email.Date > latestDate {
-			latestDate = email.Date
-		}
 	}
 
 	return result, latestDate
 }
 
-func parseEmailsWithRetry(accountDir, sinceDate string) []*parser.EmailMessage {
+func parseEmailsWithRetry(accountDir, sinceDate string) ([]*parser.EmailMessage, error) {
 	for attempt := 1; attempt <= maxLockRetries; attempt++ {
 		emails, err := parser.ParseEmails(accountDir, sinceDate)
 		if err == nil {
-			return emails
+			return emails, nil
 		}
 		errStr := strings.ToLower(err.Error())
 		if strings.Contains(errStr, "locked") || strings.Contains(errStr, "busy") {
@@ -141,13 +142,11 @@ func parseEmailsWithRetry(accountDir, sinceDate string) []*parser.EmailMessage {
 				time.Sleep(lockRetryDelay)
 				continue
 			}
-			slog.Error("eM Client database is locked after retries", "attempts", maxLockRetries)
-			return nil
+			return nil, fmt.Errorf("database locked after %d retries", maxLockRetries)
 		}
-		slog.Error("database error", "err", err)
-		return nil
+		return nil, err
 	}
-	return nil
+	return nil, fmt.Errorf("exhausted retries")
 }
 
 func indexSingleEmail(conn *sql.DB, cfg *config.Config, collectionID int64, email *parser.EmailMessage) (int, error) {
