@@ -266,17 +266,27 @@ class TestMCPService:
         svc = MCPService()
         assert svc.is_running() is False
 
+    def _start_mcp(self, svc, cfg):
+        """Helper to start MCP service with port check and sleep mocked."""
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None  # process alive
+        mock_proc.pid = 12345
+        mock_proc.stderr = iter([])  # empty stderr
+
+        with (
+            patch("local_rag.services.mcp_service.subprocess.Popen", return_value=mock_proc) as mock_popen,
+            patch("local_rag.services.mcp_service._port_in_use", return_value=False),
+            patch("local_rag.services.mcp_service.time.sleep"),
+        ):
+            svc.start(cfg)
+        return mock_proc, mock_popen
+
     def test_start_launches_process(self):
         """start() spawns a subprocess and is_running() returns True."""
         svc = MCPService()
         cfg = Config(db_path=Path("/tmp/test.db"), embedding_dimensions=4)
 
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None  # process alive
-        mock_proc.pid = 12345
-
-        with patch("local_rag.services.mcp_service.subprocess.Popen", return_value=mock_proc) as mock_popen:
-            svc.start(cfg)
+        mock_proc, mock_popen = self._start_mcp(svc, cfg)
 
         assert svc.is_running() is True
         mock_popen.assert_called_once()
@@ -286,21 +296,16 @@ class TestMCPService:
         assert cmd[0] == "uv"
         assert "serve" in cmd
 
-    def test_start_with_sse_transport(self):
-        """start() includes --port flag when transport is SSE."""
+    def test_start_always_includes_port(self):
+        """start() always includes --port flag (GUI uses SSE transport)."""
         svc = MCPService()
         cfg = Config(
             db_path=Path("/tmp/test.db"),
             embedding_dimensions=4,
-            gui=GUIConfig(mcp_transport="sse", mcp_port=9999),
+            gui=GUIConfig(mcp_port=9999),
         )
 
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        mock_proc.pid = 12345
-
-        with patch("local_rag.services.mcp_service.subprocess.Popen", return_value=mock_proc) as mock_popen:
-            svc.start(cfg)
+        _, mock_popen = self._start_mcp(svc, cfg)
 
         cmd = mock_popen.call_args[0][0]
         assert "--port" in cmd
@@ -311,28 +316,56 @@ class TestMCPService:
         svc = MCPService()
         cfg = Config(db_path=Path("/tmp/test.db"), embedding_dimensions=4)
 
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        mock_proc.pid = 12345
+        self._start_mcp(svc, cfg)
 
-        with patch("local_rag.services.mcp_service.subprocess.Popen", return_value=mock_proc) as mock_popen:
+        # Second start should not spawn another process
+        with patch("local_rag.services.mcp_service.subprocess.Popen") as mock_popen2:
             svc.start(cfg)
-            # Second start should not spawn another process
-            svc.start(cfg)
+        mock_popen2.assert_not_called()
 
-        assert mock_popen.call_count == 1
-
-    def test_stop_terminates_process(self):
-        """stop() sends SIGTERM and waits on the process."""
+    def test_start_waits_for_port(self):
+        """start() waits when port is initially in use, then starts."""
         svc = MCPService()
         cfg = Config(db_path=Path("/tmp/test.db"), embedding_dimensions=4)
 
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         mock_proc.pid = 12345
+        mock_proc.stderr = iter([])
 
-        with patch("local_rag.services.mcp_service.subprocess.Popen", return_value=mock_proc):
+        # Port busy first two checks, then free
+        port_results = iter([True, True, False])
+
+        with (
+            patch("local_rag.services.mcp_service.subprocess.Popen", return_value=mock_proc) as mock_popen,
+            patch("local_rag.services.mcp_service._port_in_use", side_effect=port_results),
+            patch("local_rag.services.mcp_service.time.sleep"),
+        ):
             svc.start(cfg)
+
+        mock_popen.assert_called_once()
+
+    def test_start_aborts_if_port_stuck(self):
+        """start() gives up when port stays busy."""
+        svc = MCPService()
+        cfg = Config(db_path=Path("/tmp/test.db"), embedding_dimensions=4)
+
+        with (
+            patch("local_rag.services.mcp_service.subprocess.Popen") as mock_popen,
+            patch("local_rag.services.mcp_service._port_in_use", return_value=True),
+            patch("local_rag.services.mcp_service.time.sleep"),
+        ):
+            svc.start(cfg)
+
+        mock_popen.assert_not_called()
+        assert svc.is_running() is False
+
+    def test_stop_terminates_process(self):
+        """stop() sends SIGTERM and waits on the process."""
+        svc = MCPService()
+        cfg = Config(db_path=Path("/tmp/test.db"), embedding_dimensions=4)
+
+        mock_proc, _ = self._start_mcp(svc, cfg)
 
         svc.stop()
 
