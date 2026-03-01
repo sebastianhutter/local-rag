@@ -27,7 +27,6 @@ class GUIConfig:
     """GUI-specific configuration."""
 
     auto_start_mcp: bool = True
-    mcp_transport: str = "stdio"  # "stdio" or "sse"
     mcp_port: int = 31123
     auto_reindex: bool = False
     auto_reindex_interval_hours: int = 6
@@ -147,7 +146,6 @@ def load_config(path: Path | None = None) -> Config:
 
     gui_config = GUIConfig(
         auto_start_mcp=gui_data.get("auto_start_mcp", True),
-        mcp_transport=gui_data.get("mcp_transport", "stdio"),
         mcp_port=gui_data.get("mcp_port", 31123),
         auto_reindex=auto_reindex,
         auto_reindex_interval_hours=raw_interval,
@@ -214,21 +212,19 @@ def save_config(config: Config, path: Path | None = None) -> None:
         with open(config_path) as f:
             existing = json.load(f)
 
-    # Update with current config values
-    existing["db_path"] = _unexpand_path(config.db_path)
+    # Update with current config values (always save fully expanded paths)
+    existing["db_path"] = str(config.db_path)
     existing["embedding_model"] = config.embedding_model
     existing["embedding_dimensions"] = config.embedding_dimensions
     existing["chunk_size_tokens"] = config.chunk_size_tokens
     existing["chunk_overlap_tokens"] = config.chunk_overlap_tokens
-    existing["obsidian_vaults"] = [_unexpand_path(v) for v in config.obsidian_vaults]
+    existing["obsidian_vaults"] = [str(v) for v in config.obsidian_vaults]
     existing["obsidian_exclude_folders"] = config.obsidian_exclude_folders
-    existing["emclient_db_path"] = _unexpand_path(config.emclient_db_path)
-    existing["calibre_libraries"] = [
-        _unexpand_path(v) for v in config.calibre_libraries
-    ]
-    existing["netnewswire_db_path"] = _unexpand_path(config.netnewswire_db_path)
+    existing["emclient_db_path"] = str(config.emclient_db_path)
+    existing["calibre_libraries"] = [str(v) for v in config.calibre_libraries]
+    existing["netnewswire_db_path"] = str(config.netnewswire_db_path)
     existing["code_groups"] = {
-        name: [_unexpand_path(p) for p in paths]
+        name: [str(p) for p in paths]
         for name, paths in config.code_groups.items()
     }
     existing["disabled_collections"] = sorted(config.disabled_collections)
@@ -242,7 +238,6 @@ def save_config(config: Config, path: Path | None = None) -> None:
     }
     existing["gui"] = {
         "auto_start_mcp": config.gui.auto_start_mcp,
-        "mcp_transport": config.gui.mcp_transport,
         "mcp_port": config.gui.mcp_port,
         "auto_reindex": config.gui.auto_reindex,
         "auto_reindex_interval_hours": config.gui.auto_reindex_interval_hours,
