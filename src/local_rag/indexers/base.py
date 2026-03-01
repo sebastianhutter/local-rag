@@ -2,6 +2,7 @@
 
 import sqlite3
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from local_rag.config import Config
@@ -29,7 +30,11 @@ class BaseIndexer(ABC):
 
     @abstractmethod
     def index(
-        self, conn: sqlite3.Connection, config: Config, force: bool = False
+        self,
+        conn: sqlite3.Connection,
+        config: Config,
+        force: bool = False,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> IndexResult:
         """Run the indexing process.
 
@@ -37,6 +42,8 @@ class BaseIndexer(ABC):
             conn: SQLite database connection.
             config: Application configuration.
             force: If True, re-index all sources regardless of change detection.
+            progress_callback: Optional callback invoked per item with
+                (current, total, item_name).
 
         Returns:
             IndexResult summarizing what happened.

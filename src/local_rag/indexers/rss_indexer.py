@@ -9,6 +9,7 @@ import json
 import logging
 import sqlite3
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -39,7 +40,11 @@ class RSSIndexer(BaseIndexer):
         self._explicit_db_path = db_path
 
     def index(
-        self, conn: sqlite3.Connection, config: Config, force: bool = False
+        self,
+        conn: sqlite3.Connection,
+        config: Config,
+        force: bool = False,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> IndexResult:
         """Index RSS articles from NetNewsWire into the "rss" collection.
 
@@ -49,6 +54,8 @@ class RSSIndexer(BaseIndexer):
             conn: SQLite connection to the RAG database.
             config: Application configuration.
             force: If True, re-index all articles regardless of prior indexing.
+            progress_callback: Optional callback invoked per article with
+                (current, total, article_title).
 
         Returns:
             IndexResult summarizing what was done.
@@ -102,7 +109,8 @@ class RSSIndexer(BaseIndexer):
         for account_dir in account_dirs:
             logger.info("Indexing account: %s", account_dir.name)
             account_result, account_latest = self._index_account(
-                conn, config, collection_id, account_dir, since_ts, force
+                conn, config, collection_id, account_dir, since_ts, force,
+                progress_callback,
             )
 
             result.total_found += account_result.total_found
@@ -129,6 +137,7 @@ class RSSIndexer(BaseIndexer):
         account_dir: Path,
         since_ts: float | None,
         force: bool,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> tuple[IndexResult, float]:
         """Index articles from a single account directory.
 
@@ -151,6 +160,12 @@ class RSSIndexer(BaseIndexer):
 
         for article in articles:
             result.total_found += 1
+            if progress_callback:
+                progress_callback(
+                    result.total_found,
+                    total_articles,
+                    article.title or "(no title)",
+                )
 
             # Skip if already indexed (unless force)
             if not force and self._is_indexed(conn, collection_id, article.article_id):

@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -31,7 +32,11 @@ class ObsidianIndexer(BaseIndexer):
         self.exclude_folders = set(exclude_folders or [])
 
     def index(
-        self, conn: sqlite3.Connection, config: Config, force: bool = False
+        self,
+        conn: sqlite3.Connection,
+        config: Config,
+        force: bool = False,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> IndexResult:
         """Index all configured Obsidian vaults.
 
@@ -39,39 +44,43 @@ class ObsidianIndexer(BaseIndexer):
             conn: SQLite database connection.
             config: Application configuration.
             force: If True, re-index all files regardless of hash match.
+            progress_callback: Optional callback invoked per file with
+                (current, total, file_name).
 
         Returns:
             IndexResult with counts of indexed/skipped/errored files.
         """
         collection_id = get_or_create_collection(conn, "obsidian", "system")
 
-        total_found = 0
-        indexed = 0
-        skipped = 0
-        errors = 0
-
+        # Collect all files across vaults first so we can report total progress
+        all_files: list[Path] = []
         for vault_path in self.vault_paths:
             vault_path = vault_path.expanduser().resolve()
             if not vault_path.is_dir():
                 logger.warning("Vault path does not exist or is not a directory: %s", vault_path)
-                errors += 1
                 continue
-
             logger.info("Indexing Obsidian vault: %s", vault_path)
             files = _walk_vault(vault_path, self.exclude_folders)
-            total_found += len(files)
             logger.info("Found %d supported files in %s", len(files), vault_path)
+            all_files.extend(files)
 
-            for file_path in files:
-                try:
-                    result = _index_file(conn, config, collection_id, file_path, force)
-                    if result == "indexed":
-                        indexed += 1
-                    elif result == "skipped":
-                        skipped += 1
-                except Exception:
-                    logger.exception("Error indexing %s", file_path)
-                    errors += 1
+        total_found = len(all_files)
+        indexed = 0
+        skipped = 0
+        errors = 0
+
+        for i, file_path in enumerate(all_files, 1):
+            if progress_callback:
+                progress_callback(i, total_found, file_path.name)
+            try:
+                result = _index_file(conn, config, collection_id, file_path, force)
+                if result == "indexed":
+                    indexed += 1
+                elif result == "skipped":
+                    skipped += 1
+            except Exception:
+                logger.exception("Error indexing %s", file_path)
+                errors += 1
 
         logger.info(
             "Obsidian indexing complete: %d found, %d indexed, %d skipped, %d errors",

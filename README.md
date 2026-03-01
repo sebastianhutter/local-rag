@@ -93,7 +93,11 @@ uv run local-rag search "budget report" --type pdf --after 2025-01-01
 
 ### 4. Use with Claude
 
-Start the MCP server and connect it to Claude Desktop or Claude Code:
+There are two ways to run the MCP server: **standalone** (CLI) or via the **GUI menu bar app**.
+
+#### Option A: Standalone (stdio)
+
+Claude manages the server process directly. Best for Claude Code projects.
 
 ```bash
 uv run local-rag serve
@@ -122,6 +126,35 @@ uv run local-rag serve
   }
 }
 ```
+
+#### Option B: GUI menu bar app (SSE)
+
+The GUI runs a persistent MCP server on port 31123 (configurable) and provides a menu bar icon for managing indexing, settings, and server status.
+
+```bash
+uv run --extra gui local-rag-gui
+```
+
+The GUI auto-starts the MCP server on launch. Claude connects to it over SSE.
+
+**Claude Code** — run in your project directory:
+```bash
+claude mcp add --transport sse local-rag http://localhost:31123/sse
+```
+
+**Claude Desktop** — Claude Desktop only supports stdio transports natively, so you need a bridge. Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "local-rag": {
+      "command": "uvx",
+      "args": ["mcp-proxy", "http://localhost:31123/sse"]
+    }
+  }
+}
+```
+
+This uses [mcp-proxy](https://github.com/punkpeye/mcp-proxy) to bridge stdio to SSE. Install it once with `uvx mcp-proxy --help` to verify it works.
 
 Once connected, Claude can search your indexed knowledge using the `rag_search` tool.
 
@@ -161,11 +194,89 @@ local-rag uses a hybrid search approach combining semantic vector search with ke
 
 Everything runs locally — embeddings are generated on your machine by Ollama, and the database is a single SQLite file.
 
-## Automatic Indexing with launchd
+## Menu Bar GUI
 
-To keep your index up to date automatically, create a macOS launchd user agent. Unlike cron, launchd catches up on missed runs after your Mac wakes from sleep.
+The GUI provides a macOS menu bar app for managing local-rag without the terminal. It handles MCP server lifecycle, indexing, and configuration through a native interface.
 
-**1. Create the plist file:**
+**Features:**
+- Start/stop MCP server from the menu bar
+- Index individual collections or all at once
+- Configure sources, code groups, and search settings via a Settings window
+- View collection stats (source counts, chunk counts, last indexed)
+- View server and indexing logs
+- Register with Claude Desktop or Claude Code in one click
+
+**Running the GUI:**
+
+```bash
+uv run --extra gui local-rag-gui
+```
+
+The GUI and CLI share the same config file (`~/.local-rag/config.json`) and database, so you can use both interchangeably.
+
+## Automatic Startup with launchd
+
+macOS launchd user agents can auto-start local-rag on login. Unlike cron, launchd catches up on missed runs after your Mac wakes from sleep.
+
+### Option A: GUI menu bar app (recommended)
+
+Starts the GUI on login. The GUI manages the MCP server and can be configured for automatic re-indexing from the Settings window.
+
+Run this from the local-rag repository directory:
+
+```bash
+cat > ~/Library/LaunchAgents/com.local-rag.gui.plist << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.local-rag.gui</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>$(which uv)</string>
+        <string>run</string>
+        <string>--extra</string>
+        <string>gui</string>
+        <string>--directory</string>
+        <string>$PWD</string>
+        <string>local-rag-gui</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>$(dirname $(which uv)):/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <!-- Log output to ~/.local-rag/gui.log -->
+    <key>StandardOutPath</key>
+    <string>$HOME/.local-rag/gui.log</string>
+    <key>StandardErrorPath</key>
+    <string>$HOME/.local-rag/gui.log</string>
+
+    <!-- Start on login -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Keep running (restart if it crashes) -->
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
+EOF
+```
+
+Load it:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.local-rag.gui.plist
+```
+
+### Option B: CLI indexing only (no GUI)
+
+Runs `index all` on a schedule. Use this if you don't need the GUI and only want periodic re-indexing.
 
 Run this from the local-rag repository directory:
 
@@ -213,40 +324,40 @@ cat > ~/Library/LaunchAgents/com.local-rag.index.plist << EOF
 EOF
 ```
 
-This resolves all paths automatically: `$(which uv)` finds your uv binary, `$PWD` uses the current directory (the local-rag repo), and `$HOME` points to your home directory. Make sure to run the command from the local-rag repository root.
-
-**2. Load the agent:**
+Load it:
 
 ```bash
 launchctl load ~/Library/LaunchAgents/com.local-rag.index.plist
 ```
 
-**3. Verify it's running:**
+### Managing launchd agents
 
 ```bash
+# Check status
 launchctl list | grep local-rag
-tail -f ~/.local-rag/index.log
-```
 
-**Managing the agent:**
+# View logs
+tail -f ~/.local-rag/gui.log    # GUI agent
+tail -f ~/.local-rag/index.log  # Index agent
 
-```bash
 # Stop and unload
+launchctl unload ~/Library/LaunchAgents/com.local-rag.gui.plist
 launchctl unload ~/Library/LaunchAgents/com.local-rag.index.plist
 
 # Reload after editing the plist
-launchctl unload ~/Library/LaunchAgents/com.local-rag.index.plist
-launchctl load ~/Library/LaunchAgents/com.local-rag.index.plist
+launchctl unload ~/Library/LaunchAgents/com.local-rag.gui.plist
+launchctl load ~/Library/LaunchAgents/com.local-rag.gui.plist
 ```
 
-**Plist fields explained:**
+### Plist fields reference
 
 | Field | Purpose |
 |-------|---------|
 | `Label` | Unique identifier for the job |
 | `ProgramArguments` | Command to run, split into argv array |
 | `EnvironmentVariables` | Sets `PATH` so launchd can find `uv` and `ollama` (launchd jobs start with a minimal environment) |
-| `StartInterval` | Run every N seconds (7200 = 2 hours) |
+| `StartInterval` | Run every N seconds (7200 = 2 hours). Only used for the index agent. |
+| `KeepAlive` | Restart the process if it exits. Only used for the GUI agent. |
 | `StandardOutPath/ErrorPath` | Where stdout/stderr are written |
 | `RunAtLoad` | Run immediately when the agent is loaded (on login or after `launchctl load`) |
 
@@ -270,6 +381,7 @@ launchctl load ~/Library/LaunchAgents/com.local-rag.index.plist
 | Code parsing | tree-sitter |
 | CLI | click |
 | MCP server | mcp Python SDK (FastMCP) |
+| Menu bar GUI | rumps + PySide6 (optional) |
 
 ## License
 

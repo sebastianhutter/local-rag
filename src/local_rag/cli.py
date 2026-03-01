@@ -664,10 +664,10 @@ def serve(port: int | None) -> None:
     """Start the MCP server."""
     from local_rag.mcp_server import create_server
 
-    server = create_server()
-
     if port:
+        server = create_server(port=port)
         click.echo(f"Starting MCP server on port {port}...")
-        server.run(transport="sse", port=port)
+        server.run(transport="sse")
     else:
+        server = create_server()
         server.run(transport="stdio")

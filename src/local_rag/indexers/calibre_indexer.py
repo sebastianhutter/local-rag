@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,7 +33,11 @@ class CalibreIndexer(BaseIndexer):
         self.library_paths = library_paths
 
     def index(
-        self, conn: sqlite3.Connection, config: Config, force: bool = False
+        self,
+        conn: sqlite3.Connection,
+        config: Config,
+        force: bool = False,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> IndexResult:
         """Index all configured Calibre libraries.
 
@@ -40,41 +45,45 @@ class CalibreIndexer(BaseIndexer):
             conn: SQLite database connection.
             config: Application configuration.
             force: If True, re-index all books regardless of hash match.
+            progress_callback: Optional callback invoked per book with
+                (current, total, book_title).
 
         Returns:
             IndexResult with counts of indexed/skipped/errored books.
         """
         collection_id = get_or_create_collection(conn, "calibre", "system")
 
-        total_found = 0
-        indexed = 0
-        skipped = 0
-        errors = 0
-
+        # Collect all books across libraries first so we can report total progress
+        all_books: list[tuple[Path, CalibreBook]] = []
         for library_path in self.library_paths:
             library_path = library_path.expanduser().resolve()
             if not library_path.is_dir():
                 logger.warning("Calibre library path does not exist: %s", library_path)
-                errors += 1
                 continue
-
             logger.info("Indexing Calibre library: %s", library_path)
             books = parse_calibre_library(library_path)
-            total_found += len(books)
             logger.info("Found %d books in %s", len(books), library_path)
+            all_books.extend((library_path, book) for book in books)
 
-            for book in books:
-                try:
-                    result = _index_book(
-                        conn, config, collection_id, library_path, book, force
-                    )
-                    if result == "indexed":
-                        indexed += 1
-                    elif result == "skipped":
-                        skipped += 1
-                except Exception:
-                    logger.exception("Error indexing book: %s", book.title)
-                    errors += 1
+        total_found = len(all_books)
+        indexed = 0
+        skipped = 0
+        errors = 0
+
+        for i, (library_path, book) in enumerate(all_books, 1):
+            if progress_callback:
+                progress_callback(i, total_found, book.title)
+            try:
+                result = _index_book(
+                    conn, config, collection_id, library_path, book, force
+                )
+                if result == "indexed":
+                    indexed += 1
+                elif result == "skipped":
+                    skipped += 1
+            except Exception:
+                logger.exception("Error indexing book: %s", book.title)
+                errors += 1
 
         logger.info(
             "Calibre indexing complete: %d found, %d indexed, %d skipped, %d errors",

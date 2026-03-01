@@ -9,6 +9,7 @@ import json
 import logging
 import sqlite3
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -478,6 +479,7 @@ class GitRepoIndexer(BaseIndexer):
         config: Config,
         force: bool = False,
         index_history: bool = False,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> IndexResult:
         """Index all supported code files in the git repository.
 
@@ -486,6 +488,8 @@ class GitRepoIndexer(BaseIndexer):
             config: Application configuration.
             force: If True, re-index all files regardless of change detection.
             index_history: If True, also index commit history.
+            progress_callback: Optional callback invoked per file/commit with
+                (current, total, item_name).
 
         Returns:
             IndexResult summarizing the indexing run.
@@ -565,7 +569,9 @@ class GitRepoIndexer(BaseIndexer):
             self.collection_name,
         )
 
-        for rel_path in indexable:
+        for i, rel_path in enumerate(indexable, 1):
+            if progress_callback:
+                progress_callback(i, total_found, rel_path)
             try:
                 was_indexed = self._index_file(
                     conn, config, rel_path, collection_id, force
