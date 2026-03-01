@@ -41,6 +41,11 @@ type App struct {
 	// the concurrent-close panic inside fyne.io/systray.ResetMenu.
 	rebuildCh chan struct{}
 
+	// lastReindex tracks the last time a full reindex completed so both the
+	// periodic timer and the wake handler respect the configured interval.
+	lastReindexMu sync.Mutex
+	lastReindex   time.Time
+
 	// Shutdown signal.
 	done chan struct{}
 }
@@ -67,7 +72,7 @@ func Run() error {
 
 	// Create Fyne app — this must be called on the main goroutine.
 	a.fyneApp = app.New()
-	a.fyneApp.SetIcon(nil) // Use default icon; user can customise later.
+	a.fyneApp.SetIcon(appIcon())
 
 	// Build initial system tray menu (safe — no concurrent callers yet).
 	a.doRebuildMenu()
@@ -96,27 +101,7 @@ func Run() error {
 	// Register macOS wake handler.
 	RegisterWakeHandler(func() {
 		slog.Info("system wake detected")
-		a.cfgMu.RLock()
-		autoReindex := a.cfg.GUI.AutoReindex
-		a.cfgMu.RUnlock()
-
-		if autoReindex && !a.indexingService.IsRunning() {
-			go func() {
-				a.cfgMu.RLock()
-				c := a.cfg
-				a.cfgMu.RUnlock()
-
-				a.indexingService.IndexAll(c, func(err error) {
-					if err == nil {
-						fyne.Do(func() {
-							a.fyneApp.SendNotification(fyne.NewNotification("local-rag", "Re-index after wake completed"))
-						})
-					}
-					a.requestRebuild()
-				})
-				a.requestRebuild()
-			}()
-		}
+		a.tryAutoReindex("wake")
 	})
 
 	// Initial status update.
@@ -363,34 +348,56 @@ func (a *App) autoReindexTimer() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	var lastReindex time.Time
-
 	for {
 		select {
 		case <-ticker.C:
-			a.cfgMu.RLock()
-			autoReindex := a.cfg.GUI.AutoReindex
-			minutes := a.cfg.GUI.AutoReindexIntervalMinutes
-			a.cfgMu.RUnlock()
-
-			if !autoReindex || minutes <= 0 {
-				continue
-			}
-
-			interval := time.Duration(minutes) * time.Minute
-			if time.Since(lastReindex) < interval {
-				continue
-			}
-
-			if !a.indexingService.IsRunning() {
-				slog.Info("auto-reindex triggered", "interval", interval)
-				lastReindex = time.Now()
-				a.triggerIndex("")
-			}
+			a.tryAutoReindex("timer")
 		case <-a.done:
 			return
 		}
 	}
+}
+
+// tryAutoReindex triggers a full reindex only if auto-reindex is enabled, the
+// configured interval has elapsed since the last reindex, and no indexing is
+// already running. Called by both the wake handler and the periodic timer.
+func (a *App) tryAutoReindex(reason string) {
+	a.cfgMu.RLock()
+	autoReindex := a.cfg.GUI.AutoReindex
+	minutes := a.cfg.GUI.AutoReindexIntervalMinutes
+	c := a.cfg
+	a.cfgMu.RUnlock()
+
+	if !autoReindex || minutes <= 0 {
+		return
+	}
+	if a.indexingService.IsRunning() {
+		return
+	}
+
+	interval := time.Duration(minutes) * time.Minute
+
+	a.lastReindexMu.Lock()
+	if time.Since(a.lastReindex) < interval {
+		a.lastReindexMu.Unlock()
+		slog.Debug("skipping auto-reindex, interval not reached", "reason", reason)
+		return
+	}
+	a.lastReindex = time.Now()
+	a.lastReindexMu.Unlock()
+
+	slog.Info("auto-reindex triggered", "reason", reason, "interval", interval)
+	go func() {
+		a.indexingService.IndexAll(c, func(err error) {
+			if err == nil {
+				fyne.Do(func() {
+					a.fyneApp.SendNotification(fyne.NewNotification("local-rag", "Re-index completed ("+reason+")"))
+				})
+			}
+			a.requestRebuild()
+		})
+		a.requestRebuild()
+	}()
 }
 
 // ---------------------------------------------------------------------------
