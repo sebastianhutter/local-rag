@@ -1,9 +1,10 @@
 """Settings window for local-rag GUI."""
 
 import logging
+import threading
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -13,14 +14,18 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QSpinBox,
     QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -28,13 +33,16 @@ from PySide6.QtWidgets import (
 )
 
 from local_rag.config import Config, save_config
-from local_rag.services import ConfigService, MCPService
+from local_rag.services import ConfigService, StatusService
 
 logger = logging.getLogger(__name__)
 
 
 class SettingsWindow(QWidget):
     """Configuration settings window with tabbed interface."""
+
+    # Emitted from background thread with (summary_text, collection_data)
+    _collections_loaded = Signal(str, list)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -43,8 +51,9 @@ class SettingsWindow(QWidget):
         self.setWindowFlags(Qt.WindowType.Window)
 
         self._config_service = ConfigService()
-        self._mcp_service = MCPService()
         self._config = self._config_service.load()
+
+        self._collections_loaded.connect(self._on_collections_loaded)
 
         self._build_ui()
         self._populate_fields()
@@ -419,23 +428,84 @@ class SettingsWindow(QWidget):
         self._auto_start_mcp_check = QCheckBox("Auto-start MCP server")
         mcp_form.addRow(self._auto_start_mcp_check)
 
-        self._mcp_transport_combo = QComboBox()
-        self._mcp_transport_combo.addItems(["stdio", "sse"])
-        mcp_form.addRow("Transport:", self._mcp_transport_combo)
-
         self._mcp_port_spin = QSpinBox()
         self._mcp_port_spin.setRange(1024, 65535)
         mcp_form.addRow("Port:", self._mcp_port_spin)
 
-        register_desktop_btn = QPushButton("Register with Claude Desktop")
-        register_desktop_btn.clicked.connect(self._register_claude_desktop)
-        mcp_form.addRow(register_desktop_btn)
-
-        register_code_btn = QPushButton("Register with Claude Code...")
-        register_code_btn.clicked.connect(self._register_claude_code)
-        mcp_form.addRow(register_code_btn)
-
         layout.addWidget(mcp_group)
+
+        # MCP registration help
+        reg_group = QGroupBox("MCP Registration")
+        reg_layout = QVBoxLayout(reg_group)
+
+        from local_rag.services.mcp_service import _PROJECT_DIR
+
+        project_dir = str(_PROJECT_DIR)
+        port = self._config.gui.mcp_port
+
+        help_text = (
+            "WITH GUI (SSE)\n"
+            "The GUI runs the MCP server on port {port}.\n"
+            "\n"
+            "Claude Code — run in your project directory:\n"
+            "\n"
+            "claude mcp add --transport sse \\\n"
+            "  local-rag http://localhost:{port}/sse\n"
+            "\n"
+            "Claude Desktop — add to\n"
+            "~/Library/Application Support/Claude/\n"
+            "claude_desktop_config.json:\n"
+            "\n"
+            '{{\n'
+            '  "mcpServers": {{\n'
+            '    "local-rag": {{\n'
+            '      "command": "uvx",\n'
+            '      "args": [\n'
+            '        "mcp-proxy",\n'
+            '        "http://localhost:{port}/sse"\n'
+            '      ]\n'
+            '    }}\n'
+            '  }}\n'
+            '}}\n'
+            "\n"
+            "─────────────────────────────────────────────\n"
+            "\n"
+            "WITHOUT GUI (stdio)\n"
+            "Claude manages the server process directly.\n"
+            "\n"
+            "Claude Code — run in your project directory:\n"
+            "\n"
+            "claude mcp add local-rag -- \\\n"
+            "  uv run --directory {project_dir} \\\n"
+            "  local-rag serve\n"
+            "\n"
+            "Claude Desktop — add to\n"
+            "~/Library/Application Support/Claude/\n"
+            "claude_desktop_config.json:\n"
+            "\n"
+            '{{\n'
+            '  "mcpServers": {{\n'
+            '    "local-rag": {{\n'
+            '      "command": "uv",\n'
+            '      "args": [\n'
+            '        "run", "--directory",\n'
+            '        "{project_dir}",\n'
+            '        "local-rag", "serve"\n'
+            '      ]\n'
+            '    }}\n'
+            '  }}\n'
+            '}}'
+        ).format(port=port, project_dir=project_dir)
+
+        from PySide6.QtGui import QFont
+
+        self._reg_help_text = QPlainTextEdit()
+        self._reg_help_text.setReadOnly(True)
+        self._reg_help_text.setPlainText(help_text)
+        self._reg_help_text.setFont(QFont("Menlo", 11))
+        reg_layout.addWidget(self._reg_help_text)
+
+        layout.addWidget(reg_group)
 
         sched_group = QGroupBox("Scheduling")
         sched_form = QFormLayout(sched_group)
@@ -458,40 +528,6 @@ class SettingsWindow(QWidget):
 
         self._tabs.addTab(tab, "MCP & Scheduling")
 
-    def _register_claude_desktop(self) -> None:
-        """Register local-rag with Claude Desktop."""
-        if self._mcp_service.register_claude_desktop():
-            QMessageBox.information(
-                self,
-                "Registered",
-                "local-rag has been registered with Claude Desktop.",
-            )
-        else:
-            QMessageBox.warning(
-                self,
-                "Registration Failed",
-                "Failed to register with Claude Desktop. Check the logs.",
-            )
-
-    def _register_claude_code(self) -> None:
-        """Register local-rag with Claude Code for a project directory."""
-        path = QFileDialog.getExistingDirectory(
-            self, "Select project directory for Claude Code"
-        )
-        if path:
-            if self._mcp_service.register_claude_code(Path(path)):
-                QMessageBox.information(
-                    self,
-                    "Registered",
-                    f"local-rag has been registered with Claude Code in:\n{path}",
-                )
-            else:
-                QMessageBox.warning(
-                    self,
-                    "Registration Failed",
-                    "Failed to register with Claude Code. Check the logs.",
-                )
-
     def _on_auto_reindex_toggled(self, checked: bool) -> None:
         """Enable/disable the interval spinbox based on the checkbox."""
         self._reindex_interval_spin.setEnabled(checked)
@@ -499,18 +535,46 @@ class SettingsWindow(QWidget):
     # -- Collections tab ------------------------------------------------------
 
     def _build_collections_tab(self) -> None:
-        """Build the Collections enable/disable tab."""
+        """Build the Collections tab with stats, enable/disable, and delete."""
         tab = QWidget()
         layout = QVBoxLayout(tab)
+
+        self._status_service = StatusService()
+
+        # Summary bar
+        self._coll_summary_label = QLabel()
+        layout.addWidget(self._coll_summary_label)
 
         layout.addWidget(
             QLabel("Uncheck a collection to disable it from indexing.")
         )
 
-        self._collections_list = QListWidget()
-        layout.addWidget(self._collections_list)
+        # Collections table (replaces the old QListWidget + separate dashboard)
+        self._coll_table = QTableWidget()
+        self._coll_table.setColumnCount(5)
+        self._coll_table.setHorizontalHeaderLabels(
+            ["Enabled", "Name", "Type", "Chunks", "Last Indexed"]
+        )
+        self._coll_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._coll_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self._coll_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        header = self._coll_table.horizontalHeader()
+        if header:
+            header.setStretchLastSection(True)
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self._coll_table)
 
-        layout.addStretch()
+        # Buttons
+        buttons = QHBoxLayout()
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self._refresh_collections)
+        delete_btn = QPushButton("Delete Collection")
+        delete_btn.clicked.connect(self._delete_collection)
+        buttons.addWidget(refresh_btn)
+        buttons.addWidget(delete_btn)
+        buttons.addStretch()
+        layout.addLayout(buttons)
+
         self._tabs.addTab(tab, "Collections")
 
     # -- Populate / Save ------------------------------------------------------
@@ -558,9 +622,6 @@ class SettingsWindow(QWidget):
 
         # MCP & Scheduling
         self._auto_start_mcp_check.setChecked(cfg.gui.auto_start_mcp)
-        idx = self._mcp_transport_combo.findText(cfg.gui.mcp_transport)
-        if idx >= 0:
-            self._mcp_transport_combo.setCurrentIndex(idx)
         self._mcp_port_spin.setValue(cfg.gui.mcp_port)
         self._auto_reindex_check.setChecked(cfg.gui.auto_reindex)
         self._reindex_interval_spin.setValue(cfg.gui.auto_reindex_interval_hours)
@@ -568,15 +629,7 @@ class SettingsWindow(QWidget):
         self._start_on_login_check.setChecked(cfg.gui.start_on_login)
 
         # Collections
-        all_names = self._config_service.get_all_collection_names(cfg)
-        for name in all_names:
-            item = QListWidgetItem(name)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            if name not in cfg.disabled_collections:
-                item.setCheckState(Qt.CheckState.Checked)
-            else:
-                item.setCheckState(Qt.CheckState.Unchecked)
-            self._collections_list.addItem(item)
+        self._refresh_collections()
 
     def _save(self) -> None:
         """Read all fields back into config and save to disk."""
@@ -645,20 +698,164 @@ class SettingsWindow(QWidget):
 
         # MCP & Scheduling
         cfg.gui.auto_start_mcp = self._auto_start_mcp_check.isChecked()
-        cfg.gui.mcp_transport = self._mcp_transport_combo.currentText()
         cfg.gui.mcp_port = self._mcp_port_spin.value()
         cfg.gui.auto_reindex = self._auto_reindex_check.isChecked()
         cfg.gui.auto_reindex_interval_hours = self._reindex_interval_spin.value()
         cfg.gui.start_on_login = self._start_on_login_check.isChecked()
 
-        # Collections - disabled set
+        # Collections - disabled set from the Enabled checkbox column
         disabled: set[str] = set()
-        for i in range(self._collections_list.count()):
-            item = self._collections_list.item(i)
-            if item and item.checkState() == Qt.CheckState.Unchecked:
-                disabled.add(item.text())
+        for i in range(self._coll_table.rowCount()):
+            checkbox_item = self._coll_table.item(i, 0)
+            name_item = self._coll_table.item(i, 1)
+            if checkbox_item and name_item:
+                if checkbox_item.checkState() == Qt.CheckState.Unchecked:
+                    disabled.add(name_item.text())
         cfg.disabled_collections = disabled
 
         save_config(cfg)
         logger.info("Settings saved")
         self.close()
+
+    def _refresh_collections(self) -> None:
+        """Kick off a background thread to load collection data."""
+        self._coll_summary_label.setText("Loading...")
+        threading.Thread(target=self._fetch_collections, daemon=True).start()
+
+    def _fetch_collections(self) -> None:
+        """Fetch collection data in a background thread and emit signal."""
+        cfg = self._config
+
+        # Build summary text
+        try:
+            overview = self._status_service.get_overview(cfg)
+            ollama_ok = self._status_service.check_ollama()
+            ollama_status = "OK" if ollama_ok else "Not running"
+            summary = (
+                f"DB: {overview['db_size_mb']} MB  |  "
+                f"{overview['collection_count']} collections  |  "
+                f"{overview['chunk_count']:,} chunks  |  "
+                f"Ollama: {ollama_status}"
+            )
+        except Exception:
+            summary = "Status unavailable"
+
+        # Get all known collection names (from config + DB)
+        all_names = self._config_service.get_all_collection_names(cfg)
+
+        # Get stats from DB
+        try:
+            collections = self._status_service.get_collections(cfg)
+            coll_map = {c["name"]: c for c in collections}
+        except Exception:
+            coll_map = {}
+
+        # Build row data: list of (name, type, chunks, last_indexed)
+        rows = []
+        for name in all_names:
+            info = coll_map.get(name, {})
+            rows.append({
+                "name": name,
+                "type": info.get("type", "-"),
+                "chunks": info.get("chunk_count", 0),
+                "last_indexed": info.get("last_indexed") or "Never",
+            })
+
+        # Signal back to the main thread
+        self._collections_loaded.emit(summary, rows)
+
+    def _on_collections_loaded(self, summary: str, rows: list) -> None:
+        """Update the Collections tab UI from fetched data (main thread)."""
+        cfg = self._config
+        self._coll_summary_label.setText(summary)
+
+        self._coll_table.setRowCount(len(rows))
+        for i, row_data in enumerate(rows):
+            name = row_data["name"]
+
+            # Enabled checkbox
+            checkbox_item = QTableWidgetItem()
+            checkbox_item.setFlags(
+                Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled
+            )
+            if name not in cfg.disabled_collections:
+                checkbox_item.setCheckState(Qt.CheckState.Checked)
+            else:
+                checkbox_item.setCheckState(Qt.CheckState.Unchecked)
+            self._coll_table.setItem(i, 0, checkbox_item)
+
+            # Name
+            self._coll_table.setItem(i, 1, QTableWidgetItem(name))
+
+            # Stats
+            self._coll_table.setItem(
+                i, 2, QTableWidgetItem(row_data["type"])
+            )
+            chunks = row_data["chunks"]
+            self._coll_table.setItem(
+                i, 3, QTableWidgetItem(str(chunks) if chunks else "-")
+            )
+            self._coll_table.setItem(
+                i, 4, QTableWidgetItem(row_data["last_indexed"])
+            )
+
+    def _delete_collection(self) -> None:
+        """Delete the selected collection after confirmation."""
+        row = self._coll_table.currentRow()
+        if row < 0:
+            QMessageBox.information(
+                self, "No Selection", "Select a collection to delete."
+            )
+            return
+
+        name_item = self._coll_table.item(row, 1)
+        if not name_item:
+            return
+        name = name_item.text()
+
+        reply = QMessageBox.question(
+            self,
+            "Confirm Deletion",
+            f'Delete collection "{name}" and all its data?\n\n'
+            "This will remove all sources, documents, and embeddings.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            from local_rag.db import get_connection, init_db
+
+            conn = get_connection(self._config)
+            init_db(conn, self._config)
+            try:
+                row_data = conn.execute(
+                    "SELECT id FROM collections WHERE name = ?", (name,)
+                ).fetchone()
+                if not row_data:
+                    QMessageBox.warning(
+                        self, "Not Found", f'Collection "{name}" not found in database.'
+                    )
+                    return
+
+                coll_id = row_data["id"]
+                conn.execute(
+                    "DELETE FROM vec_documents WHERE document_id IN "
+                    "(SELECT id FROM documents WHERE collection_id = ?)",
+                    (coll_id,),
+                )
+                conn.execute("DELETE FROM collections WHERE id = ?", (coll_id,))
+                conn.commit()
+                logger.info("Deleted collection: %s", name)
+            finally:
+                conn.close()
+
+            self._refresh_collections()
+        except Exception:
+            logger.exception("Failed to delete collection: %s", name)
+            QMessageBox.warning(
+                self,
+                "Deletion Failed",
+                f'Failed to delete collection "{name}". Check the logs.',
+            )
