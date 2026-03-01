@@ -1,9 +1,9 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
+
+	localMCP "github.com/sebastianhutter/local-rag-go/internal/mcp"
 )
 
 var servePort int
@@ -12,13 +12,10 @@ var serveCmd = &cobra.Command{
 	Use:   "serve",
 	Short: "Start MCP server",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// MCP server implementation in Phase 5
 		if servePort > 0 {
-			fmt.Printf("Starting MCP server on port %d... (not yet implemented — Phase 5)\n", servePort)
-		} else {
-			fmt.Println("Starting MCP server (stdio)... (not yet implemented — Phase 5)")
+			return localMCP.ServeSSE(servePort)
 		}
-		return nil
+		return localMCP.ServeStdio()
 	},
 }
 
