@@ -113,8 +113,14 @@ def load_config(path: Path | None = None) -> Config:
 
     if config_path.exists():
         logger.info("Loading config from %s", config_path)
-        with open(config_path) as f:
-            data = json.load(f)
+        try:
+            with open(config_path) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.error(
+                "Failed to load config from %s: %s — using defaults", config_path, e
+            )
+            data = {}
     else:
         logger.info("No config file found at %s, using defaults", config_path)
         data = {}
@@ -209,8 +215,14 @@ def save_config(config: Config, path: Path | None = None) -> None:
     # Read existing data to preserve unknown keys
     existing: dict = {}
     if config_path.exists():
-        with open(config_path) as f:
-            existing = json.load(f)
+        try:
+            with open(config_path) as f:
+                existing = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(
+                "Could not read existing config at %s: %s — will overwrite",
+                config_path, e,
+            )
 
     # Update with current config values (always save fully expanded paths)
     existing["db_path"] = str(config.db_path)

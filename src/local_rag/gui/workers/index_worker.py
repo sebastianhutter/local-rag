@@ -79,7 +79,11 @@ class IndexWorker(QThread):
             self.finished.emit(results)
         except Exception as e:
             logger.exception("Indexing failed")
-            self.error.emit(str(e))
+            from local_rag.embeddings import OllamaConnectionError
+            if isinstance(e, OllamaConnectionError):
+                self.error.emit("Ollama is not running. Start it with: ollama serve")
+            else:
+                self.error.emit(str(e))
 
     def cancel(self) -> None:
         """Request cancellation of the indexing operation."""

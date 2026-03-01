@@ -180,8 +180,15 @@ class LocalRAGApp(rumps.App):
         """Start the MCP server."""
         try:
             self.mcp_service.start(self.config)
-            self._mcp_item.title = "\U0001f7e2 MCP Server: Running"
-            logger.info("MCP server started")
+            if self.mcp_service.is_running():
+                self._mcp_item.title = "\U0001f7e2 MCP Server: Running"
+                logger.info("MCP server started")
+            else:
+                self._mcp_item.title = "\U0001f534 MCP Server: Failed"
+                logger.error("MCP server failed to start (check logs)")
+        except FileNotFoundError:
+            logger.error("Cannot start MCP server: 'uv' command not found in PATH")
+            self._mcp_item.title = "\U0001f534 MCP Server: uv not found"
         except Exception:
             logger.exception("Failed to start MCP server")
             self._mcp_item.title = "\U0001f534 MCP Server: Error"
@@ -216,6 +223,7 @@ class LocalRAGApp(rumps.App):
             chunks = overview["chunk_count"]
             self._status_item.title = f"{count} collections, {chunks:,} chunks"
         except Exception:
+            logger.debug("Failed to update status", exc_info=True)
             self._status_item.title = "Status unavailable"
 
     # -- Indexing --------------------------------------------------------------
@@ -312,10 +320,16 @@ class LocalRAGApp(rumps.App):
                 self._update_status(None)
             except Exception as e:
                 logger.exception("Indexing failed")
+                # Provide a more specific message for common errors
+                from local_rag.embeddings import OllamaConnectionError
+                if isinstance(e, OllamaConnectionError):
+                    msg = "Ollama is not running. Start it with: ollama serve"
+                else:
+                    msg = str(e)[:100]
                 rumps.notification(
                     title="local-rag",
                     subtitle="Indexing Failed",
-                    message=str(e)[:100],
+                    message=msg,
                 )
             finally:
                 self._set_indexing_state(False)
@@ -349,7 +363,10 @@ class LocalRAGApp(rumps.App):
     def _on_settings_closed(self) -> None:
         """Reload config after settings window closes."""
         self._settings_window = None
-        self.config = load_config()
+        try:
+            self.config = load_config()
+        except Exception:
+            logger.exception("Failed to reload config after settings closed")
         self._update_status(None)
 
     def _open_logs(self, sender: rumps.MenuItem) -> None:

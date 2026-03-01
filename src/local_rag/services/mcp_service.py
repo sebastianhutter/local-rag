@@ -82,11 +82,18 @@ class MCPService:
         ]
 
         logger.info("Starting MCP server: %s", " ".join(cmd))
-        self._process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
+        try:
+            self._process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            logger.error(
+                "Cannot start MCP server: 'uv' command not found. "
+                "Install it with: brew install uv"
+            )
+            raise
 
         # Stream stderr in a background thread so pipe doesn't fill up
         self._stderr_thread = threading.Thread(

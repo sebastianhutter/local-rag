@@ -724,6 +724,14 @@ class SettingsWindow(QWidget):
 
     def _fetch_collections(self) -> None:
         """Fetch collection data in a background thread and emit signal."""
+        try:
+            self._fetch_collections_inner()
+        except Exception:
+            logger.exception("Error fetching collection data")
+            self._collections_loaded.emit("Error loading collections", [])
+
+    def _fetch_collections_inner(self) -> None:
+        """Inner implementation of collection fetching."""
         cfg = self._config
 
         # Build summary text
@@ -738,6 +746,7 @@ class SettingsWindow(QWidget):
                 f"Ollama: {ollama_status}"
             )
         except Exception:
+            logger.debug("Failed to get status overview", exc_info=True)
             summary = "Status unavailable"
 
         # Get all known collection names (from config + DB)
@@ -748,6 +757,7 @@ class SettingsWindow(QWidget):
             collections = self._status_service.get_collections(cfg)
             coll_map = {c["name"]: c for c in collections}
         except Exception:
+            logger.debug("Failed to get collection stats", exc_info=True)
             coll_map = {}
 
         # Build row data: list of (name, type, chunks, last_indexed)
@@ -852,10 +862,15 @@ class SettingsWindow(QWidget):
                 conn.close()
 
             self._refresh_collections()
-        except Exception:
+        except Exception as e:
             logger.exception("Failed to delete collection: %s", name)
-            QMessageBox.warning(
-                self,
-                "Deletion Failed",
-                f'Failed to delete collection "{name}". Check the logs.',
-            )
+            import sqlite3
+            if isinstance(e, sqlite3.OperationalError) and "locked" in str(e).lower():
+                msg = (
+                    f'Cannot delete "{name}" — the database is locked.\n\n'
+                    "This usually means indexing is in progress. "
+                    "Wait for it to finish and try again."
+                )
+            else:
+                msg = f'Failed to delete collection "{name}":\n{e}'
+            QMessageBox.warning(self, "Deletion Failed", msg)
