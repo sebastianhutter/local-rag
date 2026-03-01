@@ -9,6 +9,7 @@ import json
 import logging
 import sqlite3
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -58,7 +59,11 @@ class EmailIndexer(BaseIndexer):
         self._explicit_db_path = db_path
 
     def index(
-        self, conn: sqlite3.Connection, config: Config, force: bool = False
+        self,
+        conn: sqlite3.Connection,
+        config: Config,
+        force: bool = False,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> IndexResult:
         """Index emails from eM Client into the "email" collection.
 
@@ -68,6 +73,8 @@ class EmailIndexer(BaseIndexer):
             conn: SQLite connection to the RAG database.
             config: Application configuration.
             force: If True, re-index all emails regardless of prior indexing.
+            progress_callback: Optional callback invoked per email with
+                (current, total, email_subject).
 
         Returns:
             IndexResult summarizing what was done.
@@ -121,7 +128,8 @@ class EmailIndexer(BaseIndexer):
         for account_dir in account_dirs:
             logger.info("Indexing account: %s", account_dir.name)
             account_result = self._index_account(
-                conn, config, collection_id, account_dir, since_date, force
+                conn, config, collection_id, account_dir, since_date, force,
+                progress_callback,
             )
 
             result.total_found += account_result.total_found
@@ -148,6 +156,7 @@ class EmailIndexer(BaseIndexer):
         account_dir: Path,
         since_date: str | None,
         force: bool,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> "AccountIndexResult":
         """Index emails from a single account directory."""
         result = AccountIndexResult()
@@ -165,6 +174,12 @@ class EmailIndexer(BaseIndexer):
 
         for email_msg in emails:
             result.total_found += 1
+            if progress_callback:
+                progress_callback(
+                    result.total_found,
+                    total_emails,
+                    email_msg.subject or "(no subject)",
+                )
 
             # Skip if already indexed (unless force)
             if not force and self._is_indexed(conn, collection_id, email_msg.message_id):

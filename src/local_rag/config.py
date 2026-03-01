@@ -23,6 +23,18 @@ class SearchDefaults:
 
 
 @dataclass
+class GUIConfig:
+    """GUI-specific configuration."""
+
+    auto_start_mcp: bool = True
+    mcp_transport: str = "stdio"  # "stdio" or "sse"
+    mcp_port: int = 31123
+    auto_reindex: bool = False
+    auto_reindex_interval_hours: int = 6
+    start_on_login: bool = False
+
+
+@dataclass
 class Config:
     """Application configuration."""
 
@@ -34,7 +46,10 @@ class Config:
     obsidian_vaults: list[Path] = field(default_factory=list)
     obsidian_exclude_folders: list[str] = field(default_factory=list)
     emclient_db_path: Path = field(
-        default_factory=lambda: Path.home() / "Library" / "Application Support" / "eM Client"
+        default_factory=lambda: Path.home()
+        / "Library"
+        / "Application Support"
+        / "eM Client"
     )
     calibre_libraries: list[Path] = field(default_factory=list)
     netnewswire_db_path: Path = field(
@@ -55,6 +70,7 @@ class Config:
     git_history_in_months: int = 6
     git_commit_subject_blacklist: list[str] = field(default_factory=list)
     search_defaults: SearchDefaults = field(default_factory=SearchDefaults)
+    gui: GUIConfig = field(default_factory=GUIConfig)
 
     def is_collection_enabled(self, name: str) -> bool:
         """Check if a collection is enabled for indexing.
@@ -72,6 +88,14 @@ class Config:
 def _expand_path(p: str | Path) -> Path:
     """Expand ~ and resolve a path."""
     return Path(p).expanduser()
+
+
+def _unexpand_path(p: Path) -> str:
+    """Convert an absolute path back to ~/... form if under the home directory."""
+    try:
+        return "~/" + str(p.relative_to(Path.home()))
+    except ValueError:
+        return str(p)
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -112,6 +136,24 @@ def load_config(path: Path | None = None) -> Config:
         code_groups[group_name] = [_expand_path(p) for p in paths]
     disabled_collections = set(data.get("disabled_collections", []))
 
+    gui_data = data.get("gui", {})
+    # Backward compat: if auto_reindex is absent but interval > 0, derive it
+    raw_auto_reindex = gui_data.get("auto_reindex")
+    raw_interval = gui_data.get("auto_reindex_interval_hours", 6)
+    if raw_auto_reindex is None:
+        auto_reindex = raw_interval > 0 if raw_interval != 6 else False
+    else:
+        auto_reindex = bool(raw_auto_reindex)
+
+    gui_config = GUIConfig(
+        auto_start_mcp=gui_data.get("auto_start_mcp", True),
+        mcp_transport=gui_data.get("mcp_transport", "stdio"),
+        mcp_port=gui_data.get("mcp_port", 31123),
+        auto_reindex=auto_reindex,
+        auto_reindex_interval_hours=raw_interval,
+        start_on_login=gui_data.get("start_on_login", False),
+    )
+
     config = Config(
         db_path=_expand_path(data.get("db_path", str(DEFAULT_DB_PATH))),
         embedding_model=data.get("embedding_model", "bge-m3"),
@@ -121,7 +163,10 @@ def load_config(path: Path | None = None) -> Config:
         obsidian_vaults=obsidian_vaults,
         obsidian_exclude_folders=obsidian_exclude_folders,
         emclient_db_path=_expand_path(
-            data.get("emclient_db_path", str(Path.home() / "Library" / "Application Support" / "eM Client"))
+            data.get(
+                "emclient_db_path",
+                str(Path.home() / "Library" / "Application Support" / "eM Client"),
+            )
         ),
         calibre_libraries=calibre_libraries,
         netnewswire_db_path=_expand_path(
@@ -145,6 +190,69 @@ def load_config(path: Path | None = None) -> Config:
         git_history_in_months=data.get("git_history_in_months", 6),
         git_commit_subject_blacklist=data.get("git_commit_subject_blacklist", []),
         search_defaults=search_defaults,
+        gui=gui_config,
     )
 
     return config
+
+
+def save_config(config: Config, path: Path | None = None) -> None:
+    """Save configuration to a JSON file, preserving unknown keys.
+
+    Reads the existing file first (if present) so that keys not managed
+    by this application are kept intact.
+
+    Args:
+        config: The Config instance to persist.
+        path: Path to config file. Defaults to ~/.local-rag/config.json.
+    """
+    config_path = path or DEFAULT_CONFIG_PATH
+
+    # Read existing data to preserve unknown keys
+    existing: dict = {}
+    if config_path.exists():
+        with open(config_path) as f:
+            existing = json.load(f)
+
+    # Update with current config values
+    existing["db_path"] = _unexpand_path(config.db_path)
+    existing["embedding_model"] = config.embedding_model
+    existing["embedding_dimensions"] = config.embedding_dimensions
+    existing["chunk_size_tokens"] = config.chunk_size_tokens
+    existing["chunk_overlap_tokens"] = config.chunk_overlap_tokens
+    existing["obsidian_vaults"] = [_unexpand_path(v) for v in config.obsidian_vaults]
+    existing["obsidian_exclude_folders"] = config.obsidian_exclude_folders
+    existing["emclient_db_path"] = _unexpand_path(config.emclient_db_path)
+    existing["calibre_libraries"] = [
+        _unexpand_path(v) for v in config.calibre_libraries
+    ]
+    existing["netnewswire_db_path"] = _unexpand_path(config.netnewswire_db_path)
+    existing["code_groups"] = {
+        name: [_unexpand_path(p) for p in paths]
+        for name, paths in config.code_groups.items()
+    }
+    existing["disabled_collections"] = sorted(config.disabled_collections)
+    existing["git_history_in_months"] = config.git_history_in_months
+    existing["git_commit_subject_blacklist"] = config.git_commit_subject_blacklist
+    existing["search_defaults"] = {
+        "top_k": config.search_defaults.top_k,
+        "rrf_k": config.search_defaults.rrf_k,
+        "vector_weight": config.search_defaults.vector_weight,
+        "fts_weight": config.search_defaults.fts_weight,
+    }
+    existing["gui"] = {
+        "auto_start_mcp": config.gui.auto_start_mcp,
+        "mcp_transport": config.gui.mcp_transport,
+        "mcp_port": config.gui.mcp_port,
+        "auto_reindex": config.gui.auto_reindex,
+        "auto_reindex_interval_hours": config.gui.auto_reindex_interval_hours,
+        "start_on_login": config.gui.start_on_login,
+    }
+
+    # Ensure directory exists and write
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(config_path, "w") as f:
+        json.dump(existing, f, indent=2)
+        f.write("\n")
+
+    logger.info("Saved config to %s", config_path)
