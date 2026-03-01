@@ -328,11 +328,14 @@ func indexSingleFile(conn *sql.DB, cfg *config.Config, filePath string, collecti
 		return false, nil
 	}
 
+	slog.Debug("parsing file", "path", filepath.Base(filePath), "type", sourceType)
 	chunks := parseAndChunk(filePath, sourceType, cfg)
 	if len(chunks) == 0 {
 		slog.Warn("no content extracted, skipping", "path", filePath)
 		return false, nil
 	}
+
+	slog.Debug("embedding chunks", "path", filepath.Base(filePath), "chunks", len(chunks))
 
 	info, _ := os.Stat(filePath)
 	mtime := ""
