@@ -1,0 +1,40 @@
+{
+    "db_path": "~/.local-rag/rag.db",
+    "embedding_model": "bge-m3",
+    "embedding_dimensions": 1024,
+    "chunk_size_tokens": 500,
+    "chunk_overlap_tokens": 50,
+    "obsidian_vaults": [
+        "~/Documents/MyVault"
+    ],
+    "obsidian_exclude_folders": [
+        "_Inbox",
+        "_Templates"
+    ],
+    "emclient_db_path": "~/Library/Application Support/eM Client",
+    "calibre_libraries": [
+        "~/CalibreLibrary"
+    ],
+    "netnewswire_db_path": "~/Library/Containers/com.ranchero.NetNewsWire-Evergreen/Data/Library/Application Support/NetNewsWire/Accounts",
+    "code_groups": {
+        "my-org": [
+            "~/Repository/my-org/repo1",
+            "~/Repository/my-org/repo2"
+        ],
+        "terraform": [
+            "~/Repository/my-org/tf-infra",
+            "~/Repository/other-org/tf-modules"
+        ]
+    },
+    "disabled_collections": [],
+    "git_history_in_months": 6,
+    "git_commit_subject_blacklist": [
+        "Ignore commit messages beginning with these prefixes"
+    ],
+    "search_defaults": {
+        "top_k": 10,
+        "rrf_k": 60,
+        "vector_weight": 0.7,
+        "fts_weight": 0.3
+    }
+}
