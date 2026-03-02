@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/sebastianhutter/local-rag-go/internal/gui"
 )
 
 var verbose bool
@@ -13,6 +15,9 @@ var verbose bool
 var rootCmd = &cobra.Command{
 	Use:   "local-rag",
 	Short: "Local RAG — privacy-preserving retrieval augmented generation",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return gui.Run()
+	},
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		level := slog.LevelInfo
 		if verbose {
