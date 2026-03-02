@@ -2,14 +2,40 @@ package parser
 
 import (
 	"log/slog"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/dslipak/pdf"
+	"github.com/klippa-app/go-pdfium"
+	"github.com/klippa-app/go-pdfium/requests"
+	"github.com/klippa-app/go-pdfium/webassembly"
 )
 
-// pdfPageTimeout is the maximum time to spend extracting text from a single page.
-const pdfPageTimeout = 30 * time.Second
+// pdfPool is a lazily-initialized singleton so the WASM runtime is reused
+// across all ParsePDF calls rather than re-created per file.
+var (
+	pdfPool     pdfium.Pool
+	pdfPoolOnce sync.Once
+	pdfPoolErr  error
+)
+
+func initPDFPool() {
+	pdfPool, pdfPoolErr = webassembly.Init(webassembly.Config{
+		MinIdle:  1,
+		MaxIdle:  1,
+		MaxTotal: 1,
+	})
+}
+
+// ClosePDFPool shuts down the PDFium WASM pool. Call on application exit.
+func ClosePDFPool() {
+	if pdfPool != nil {
+		if err := pdfPool.Close(); err != nil {
+			slog.Error("failed to close PDF pool", "err", err)
+		}
+	}
+}
 
 // PageText represents a single page of extracted PDF text.
 type PageText struct {
@@ -17,22 +43,67 @@ type PageText struct {
 	Text       string
 }
 
-// ParsePDF extracts text from a PDF file page by page.
+// ParsePDF extracts text from a PDF file page by page using PDFium (WASM).
 func ParsePDF(path string) []PageText {
-	reader, err := pdf.Open(path)
-	if err != nil {
-		slog.Error("failed to open PDF", "path", path, "err", err)
+	pdfPoolOnce.Do(initPDFPool)
+	if pdfPoolErr != nil {
+		slog.Error("failed to init PDF pool", "err", pdfPoolErr)
 		return nil
 	}
 
-	var pages []PageText
-	numPages := reader.NumPage()
+	instance, err := pdfPool.GetInstance(30 * time.Second)
+	if err != nil {
+		slog.Error("failed to get PDF pool instance", "err", err)
+		return nil
+	}
+	defer instance.Close()
+
+	pdfBytes, err := os.ReadFile(path)
+	if err != nil {
+		slog.Error("failed to read PDF file", "path", path, "err", err)
+		return nil
+	}
+
+	doc, err := instance.OpenDocument(&requests.OpenDocument{
+		File: &pdfBytes,
+	})
+	if err != nil {
+		slog.Error("failed to open PDF document", "path", path, "err", err)
+		return nil
+	}
+	defer instance.FPDF_CloseDocument(&requests.FPDF_CloseDocument{
+		Document: doc.Document,
+	})
+
+	pageCountResp, err := instance.FPDF_GetPageCount(&requests.FPDF_GetPageCount{
+		Document: doc.Document,
+	})
+	if err != nil {
+		slog.Error("failed to get PDF page count", "path", path, "err", err)
+		return nil
+	}
+
+	numPages := pageCountResp.PageCount
 	slog.Debug("parsing PDF", "path", path, "pages", numPages)
 
-	for i := 1; i <= numPages; i++ {
-		text := extractPageText(reader, i, path)
+	var pages []PageText
+	for i := 0; i < numPages; i++ {
+		resp, err := instance.GetPageText(&requests.GetPageText{
+			Page: requests.Page{
+				ByIndex: &requests.PageByIndex{
+					Document: doc.Document,
+					Index:    i,
+				},
+			},
+		})
+		if err != nil {
+			slog.Warn("failed to extract text from page", "page", i+1, "path", path, "err", err)
+			continue
+		}
+
+		text := strings.TrimSpace(resp.Text)
 		if text != "" {
-			pages = append(pages, PageText{PageNumber: i, Text: text})
+			pages = append(pages, PageText{PageNumber: i + 1, Text: text})
 		}
 	}
 
@@ -41,42 +112,4 @@ func ParsePDF(path string) []PageText {
 	}
 
 	return pages
-}
-
-// extractPageText extracts text from a single page with a timeout to avoid
-// hanging on complex or malformed PDF pages.
-func extractPageText(reader *pdf.Reader, pageNum int, path string) string {
-	type result struct {
-		text string
-		err  error
-	}
-	ch := make(chan result, 1)
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Warn("panic extracting PDF page", "page", pageNum, "path", path, "err", r)
-				ch <- result{err: nil}
-			}
-		}()
-		page := reader.Page(pageNum)
-		if page.V.IsNull() {
-			ch <- result{}
-			return
-		}
-		text, err := page.GetPlainText(nil)
-		ch <- result{text: strings.TrimSpace(text), err: err}
-	}()
-
-	select {
-	case r := <-ch:
-		if r.err != nil {
-			slog.Warn("failed to extract text from page", "page", pageNum, "path", path, "err", r.err)
-			return ""
-		}
-		return r.text
-	case <-time.After(pdfPageTimeout):
-		slog.Warn("timeout extracting PDF page, skipping", "page", pageNum, "path", path, "timeout", pdfPageTimeout)
-		return ""
-	}
 }

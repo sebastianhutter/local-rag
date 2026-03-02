@@ -12,6 +12,7 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 
 	"github.com/sebastianhutter/local-rag-go/internal/config"
+	"github.com/sebastianhutter/local-rag-go/internal/parser"
 )
 
 // App is the main GUI application.
@@ -83,7 +84,6 @@ func Run() error {
 
 	// Start background timers.
 	go a.statusTimer()
-	go a.mcpHealthTimer()
 	go a.autoReindexTimer()
 
 	// Auto-start MCP if configured.
@@ -98,12 +98,6 @@ func Run() error {
 		}()
 	}
 
-	// Register macOS wake handler.
-	RegisterWakeHandler(func() {
-		slog.Info("system wake detected")
-		a.tryAutoReindex("wake")
-	})
-
 	// Initial status update.
 	go a.updateStatus()
 
@@ -115,6 +109,7 @@ func Run() error {
 	// Cleanup.
 	close(a.done)
 	a.mcpService.Stop()
+	parser.ClosePDFPool()
 	slog.Info("local-rag GUI stopped")
 
 	return nil
@@ -317,7 +312,7 @@ func (a *App) updateStatus() {
 // ---------------------------------------------------------------------------
 
 func (a *App) statusTimer() {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 	for {
 		select {
@@ -329,23 +324,10 @@ func (a *App) statusTimer() {
 	}
 }
 
-func (a *App) mcpHealthTimer() {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			a.requestRebuild()
-		case <-a.done:
-			return
-		}
-	}
-}
-
 func (a *App) autoReindexTimer() {
-	// Check every 30 seconds whether a reindex is due. This lets the timer
+	// Check every 60 seconds whether a reindex is due. This lets the timer
 	// pick up config changes (enable/disable, interval) without a restart.
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 
 	for {
