@@ -9,6 +9,10 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
+// maxDisplayLines is the maximum number of log lines kept in the viewer.
+// Old lines are trimmed from the top when this limit is exceeded.
+const maxDisplayLines = 2000
+
 func (a *App) openLogs() {
 	// Raise existing window if already open.
 	if a.logsWin != nil {
@@ -28,10 +32,13 @@ func (a *App) openLogs() {
 	logEntry.TextStyle.Monospace = true
 	logEntry.Wrapping = fyne.TextWrapWord
 
-	// Load existing history.
-	history := a.logHandler.GetHistory()
-	if len(history) > 0 {
-		logEntry.SetText(strings.Join(history, "\n") + "\n")
+	// Capped line buffer — keeps the widget text bounded.
+	displayed := a.logHandler.GetHistory()
+	if len(displayed) > maxDisplayLines {
+		displayed = displayed[len(displayed)-maxDisplayLines:]
+	}
+	if len(displayed) > 0 {
+		logEntry.SetText(strings.Join(displayed, "\n") + "\n")
 	}
 
 	// Auto-scroll state.
@@ -47,6 +54,7 @@ func (a *App) openLogs() {
 	}
 
 	clearBtn := widget.NewButton("Clear", func() {
+		displayed = displayed[:0]
 		logEntry.SetText("")
 		a.logHandler.Clear()
 	})
@@ -74,13 +82,17 @@ func (a *App) openLogs() {
 				if len(batch) == 0 {
 					continue
 				}
-				lines := strings.Join(batch, "\n") + "\n"
-				batch = batch[:0]
+				newLines := batch
+				batch = nil
 				scroll := autoScroll
 				fyne.Do(func() {
-					logEntry.SetText(logEntry.Text + lines)
+					displayed = append(displayed, newLines...)
+					if len(displayed) > maxDisplayLines {
+						displayed = displayed[len(displayed)-maxDisplayLines:]
+					}
+					logEntry.SetText(strings.Join(displayed, "\n") + "\n")
 					if scroll {
-						logEntry.CursorRow = len(strings.Split(logEntry.Text, "\n")) - 1
+						logEntry.CursorRow = len(displayed)
 					}
 				})
 			case <-stopCh:
