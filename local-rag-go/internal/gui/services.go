@@ -352,7 +352,6 @@ func (s *StatusService) GetOverview(cfg *config.Config) Overview {
 		ov.LastIndexed = lastIndexed.String
 	}
 
-	ov.OllamaOnline = s.CheckOllama()
 	return ov
 }
 

@@ -517,7 +517,7 @@ func (a *App) buildCollectionsTab(cfg *config.Config, w fyne.Window) fyne.Canvas
 			}
 			ov := a.statusService.GetOverview(cfg)
 			ollamaStatus := "Offline"
-			if ov.OllamaOnline {
+			if a.statusService.CheckOllama() {
 				ollamaStatus = "OK"
 			}
 			fyne.Do(func() {
