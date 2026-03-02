@@ -15,7 +15,7 @@ APP_DIR="$BUILD_DIR/local-rag.app"
 
 BUNDLE_ID="com.sebastianhutter.local-rag"
 APP_NAME="local-rag"
-VERSION="0.1.0"
+VERSION="${VERSION:-0.1.0}"
 
 # ── Verify binary exists ────────────────────────────────────────────────────
 if [[ ! -f "$BINARY" ]]; then

@@ -10,9 +10,13 @@ import (
 	"github.com/sebastianhutter/local-rag-go/internal/gui"
 )
 
-var verbose bool
+var (
+	verbose bool
+	version = "dev"
+)
 
 var rootCmd = &cobra.Command{
+	Version: version,
 	Use:   "local-rag",
 	Short: "Local RAG — privacy-preserving retrieval augmented generation",
 	RunE: func(cmd *cobra.Command, args []string) error {
