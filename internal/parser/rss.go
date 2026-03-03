@@ -71,11 +71,13 @@ func ParseArticles(accountDir string, sinceTS float64) ([]*Article, error) {
 	query := "SELECT articleID, feedID, title, contentHTML, contentText, url, externalURL, summary, datePublished FROM articles"
 	var args []any
 	if sinceTS > 0 {
-		// datePublished may be stored as datetime strings or as numeric timestamps.
-		// Use datetime() to normalize both formats for comparison.
-		sinceTime := time.Unix(int64(sinceTS), 0).UTC().Format("2006-01-02 15:04:05")
-		query += " WHERE datetime(datePublished) > datetime(?)"
-		args = append(args, sinceTime)
+		// datePublished is a Unix timestamp (REAL). Compare numerically, exactly
+		// like the Python version did: WHERE datePublished > since_ts.
+		// Using datetime() would interpret the large Unix value as a Julian Day
+		// Number (year ~4.7M AD), making every row pass the filter and silently
+		// dropping rows where datePublished IS NULL.
+		query += " WHERE datePublished > ?"
+		args = append(args, sinceTS)
 	}
 	query += " ORDER BY datePublished ASC"
 
