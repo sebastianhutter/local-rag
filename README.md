@@ -4,14 +4,14 @@ A fully local, privacy-preserving RAG (Retrieval Augmented Generation) system fo
 
 ## Supported Sources
 
-| Source | Collection Type | What Gets Indexed |
-|--------|----------------|-------------------|
-| **Obsidian** | system | Vault files — `.md`, `.pdf`, `.docx`, `.html`, `.txt`, `.epub` |
-| **eM Client** | system | Emails — subject, body, sender, recipients, date, folder |
-| **Calibre** | system | Ebook metadata + content — EPUB/PDF with author, tags, series |
-| **NetNewsWire** | system | RSS articles — title, author, content, feed name |
-| **Code Groups** | code | Git repos grouped by org/topic — tree-sitter structural parsing + commit history |
-| **Project Docs** | project | Any folder of documents dispatched to the correct parser by extension |
+| Source           | Collection Type | What Gets Indexed                                                                |
+|------------------|-----------------|----------------------------------------------------------------------------------|
+| **Obsidian**     | system          | Vault files — `.md`, `.pdf`, `.docx`, `.html`, `.txt`, `.epub`                   |
+| **eM Client**    | system          | Emails — subject, body, sender, recipients, date, folder                         |
+| **Calibre**      | system          | Ebook metadata + content — EPUB/PDF with author, tags, series                    |
+| **NetNewsWire**  | system          | RSS articles — title, author, content, feed name                                 |
+| **Code Groups**  | code            | Git repos grouped by org/topic — tree-sitter structural parsing + commit history |
+| **Project Docs** | project         | Any folder of documents dispatched to the correct parser by extension            |
 
 ## Installation
 
@@ -115,8 +115,8 @@ When running as a menu bar app, the MCP server uses SSE transport on `http://127
 {
   "mcpServers": {
     "local-rag": {
-      "type": "sse",
-      "url": "http://127.0.0.1:31123/sse"
+      "command": "/path/to/local-rag",
+      "args": ["serve"]
     }
   }
 }
@@ -191,46 +191,46 @@ local-rag -v, --verbose     Enable debug logging (global flag)
 
 Config file: `~/.local-rag/config.json`
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `db_path` | `~/.local-rag/rag.db` | SQLite database location |
-| `embedding_model` | `bge-m3` | Ollama embedding model |
-| `embedding_dimensions` | `1024` | Embedding vector dimensions |
-| `chunk_size_tokens` | `500` | Chunk size in tokens |
-| `chunk_overlap_tokens` | `50` | Overlap between chunks |
-| `obsidian_vaults` | `[]` | Paths to Obsidian vaults |
-| `obsidian_exclude_folders` | `[]` | Folders to skip in vaults |
-| `emclient_db_path` | `~/Library/Application Support/eM Client` | eM Client database path |
-| `calibre_libraries` | `[]` | Paths to Calibre libraries |
-| `netnewswire_db_path` | *(auto-detected)* | NetNewsWire database path |
-| `code_groups` | `{}` | Map of group name to repo paths |
-| `disabled_collections` | `[]` | Collection names to skip during indexing |
-| `git_history_in_months` | `6` | How far back to index commit history |
-| `git_commit_subject_blacklist` | `[]` | Commit subjects to skip |
-| `search_defaults.top_k` | `10` | Default number of search results |
-| `search_defaults.rrf_k` | `60` | Reciprocal Rank Fusion parameter |
-| `search_defaults.vector_weight` | `0.7` | Weight for vector similarity |
-| `search_defaults.fts_weight` | `0.3` | Weight for full-text search |
-| `gui.auto_start_mcp` | `true` | Start MCP server when GUI launches |
-| `gui.mcp_port` | `31123` | SSE server port |
-| `gui.auto_reindex` | `false` | Enable periodic re-indexing |
-| `gui.auto_reindex_interval_minutes` | `60` | Minutes between auto-reindex runs |
-| `gui.start_on_login` | `false` | Register as login item via launchd |
+| Key                                 | Default                                   | Description                              |
+|-------------------------------------|-------------------------------------------|------------------------------------------|
+| `db_path`                           | `~/.local-rag/rag.db`                     | SQLite database location                 |
+| `embedding_model`                   | `bge-m3`                                  | Ollama embedding model                   |
+| `embedding_dimensions`              | `1024`                                    | Embedding vector dimensions              |
+| `chunk_size_tokens`                 | `500`                                     | Chunk size in tokens                     |
+| `chunk_overlap_tokens`              | `50`                                      | Overlap between chunks                   |
+| `obsidian_vaults`                   | `[]`                                      | Paths to Obsidian vaults                 |
+| `obsidian_exclude_folders`          | `[]`                                      | Folders to skip in vaults                |
+| `emclient_db_path`                  | `~/Library/Application Support/eM Client` | eM Client database path                  |
+| `calibre_libraries`                 | `[]`                                      | Paths to Calibre libraries               |
+| `netnewswire_db_path`               | *(auto-detected)*                         | NetNewsWire database path                |
+| `code_groups`                       | `{}`                                      | Map of group name to repo paths          |
+| `disabled_collections`              | `[]`                                      | Collection names to skip during indexing |
+| `git_history_in_months`             | `6`                                       | How far back to index commit history     |
+| `git_commit_subject_blacklist`      | `[]`                                      | Commit subjects to skip                  |
+| `search_defaults.top_k`             | `10`                                      | Default number of search results         |
+| `search_defaults.rrf_k`             | `60`                                      | Reciprocal Rank Fusion parameter         |
+| `search_defaults.vector_weight`     | `0.7`                                     | Weight for vector similarity             |
+| `search_defaults.fts_weight`        | `0.3`                                     | Weight for full-text search              |
+| `gui.auto_start_mcp`                | `true`                                    | Start MCP server when GUI launches       |
+| `gui.mcp_port`                      | `31123`                                   | SSE server port                          |
+| `gui.auto_reindex`                  | `false`                                   | Enable periodic re-indexing              |
+| `gui.auto_reindex_interval_minutes` | `60`                                      | Minutes between auto-reindex runs        |
+| `gui.start_on_login`                | `false`                                   | Register as login item via launchd       |
 
 ## Tech Stack
 
-| Component | Choice | Notes |
-|-----------|--------|-------|
-| Language | Go 1.24+ | CGO required for SQLite |
-| Database | SQLite + sqlite-vec + FTS5 | Single file, no server |
-| Embeddings | Ollama + bge-m3 (1024d) | Fully local, no API keys |
-| GUI | Fyne v2 + systray | macOS menu bar app |
-| MCP | mcp-go | SSE and stdio transports |
-| PDF | go-pdfium (WASM/Wazero) | No CGO needed for PDF |
-| DOCX | lu4p/cat | Word document extraction |
-| Code parsing | go-tree-sitter | 13 languages with structural splitting |
-| CLI | Cobra | Subcommands, flags, help |
-| HTML cleanup | golang.org/x/net/html | Strip tags from email/RSS |
+| Component    | Choice                     | Notes                                  |
+|--------------|----------------------------|----------------------------------------|
+| Language     | Go 1.24+                   | CGO required for SQLite                |
+| Database     | SQLite + sqlite-vec + FTS5 | Single file, no server                 |
+| Embeddings   | Ollama + bge-m3 (1024d)    | Fully local, no API keys               |
+| GUI          | Fyne v2 + systray          | macOS menu bar app                     |
+| MCP          | mcp-go                     | SSE and stdio transports               |
+| PDF          | go-pdfium (WASM/Wazero)    | No CGO needed for PDF                  |
+| DOCX         | lu4p/cat                   | Word document extraction               |
+| Code parsing | go-tree-sitter             | 13 languages with structural splitting |
+| CLI          | Cobra                      | Subcommands, flags, help               |
+| HTML cleanup | golang.org/x/net/html      | Strip tags from email/RSS              |
 
 ### Tree-sitter Languages
 
