@@ -278,3 +278,9 @@ scripts/
   build-app.sh       Create macOS .app bundle
   build-dmg.sh       Create DMG installer
 ```
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+
+All dependencies use permissive licenses (MIT, BSD, Apache 2.0). PDF parsing uses [go-pdfium](https://github.com/klippa-app/go-pdfium) (MIT) with the PDFium library running in a WASM sandbox (BSD 3-Clause).
