@@ -23,7 +23,7 @@ flowchart LR
     end
 
     subgraph Indexer
-        IDX["Python Indexer<br/>chunking + Ollama embed"]
+        IDX["Go Indexer<br/>chunking + Ollama embed"]
     end
 
     subgraph Storage
@@ -83,7 +83,7 @@ Embeddings are generated locally using Ollama, which runs ML models on-device.
 
 - **bge-m3** is the default embedding model, producing 1024-dimensional vectors. It supports multilingual text and has strong retrieval performance.
 - The embedding dimension is configurable — changing the model requires re-indexing all content.
-- The Python `ollama` client communicates with the Ollama HTTP API at `localhost:11434`.
+- A native Go HTTP client communicates with the Ollama HTTP API at `localhost:11434`.
 - Texts are sent in batches of 32 with a 5-minute timeout per batch to avoid hangs.
 
 ### Hybrid Search with Reciprocal Rank Fusion (RRF)
@@ -110,7 +110,7 @@ The MCP server exposes the RAG as tools that Claude Desktop and Claude Code can 
 - **`rag_collection_info`** — detailed info about a specific collection
 - **`rag_index`** — trigger indexing for a collection
 
-Uses the `mcp` Python SDK (FastMCP) with stdio transport by default. Configured via `.mcp.json` in the project root.
+Uses the `mcp-go` library with both SSE and stdio transports. The GUI (menu bar app) exposes an SSE server on `http://127.0.0.1:31123/sse`; `local-rag serve` exposes stdio for use as a Claude Desktop subprocess.
 
 ## Data Flow: Indexing
 
@@ -120,11 +120,11 @@ File on disk / SQLite database
     v
 Parser (type-specific)
     |  Markdown: extract frontmatter, wikilinks, tags, strip dataview
-    |  PDF: extract text page-by-page (pymupdf)
-    |  DOCX: extract paragraphs, headings, tables (python-docx)
-    |  EPUB: extract chapters (zipfile + BeautifulSoup)
-    |  HTML: extract text preserving structure (BeautifulSoup)
-    |  Code: tree-sitter structural parsing (functions, classes, etc.)
+    |  PDF: extract text page-by-page (go-pdfium / WASM)
+    |  DOCX: extract paragraphs and headings (lu4p/cat)
+    |  EPUB: extract chapters (zip + XML)
+    |  HTML: extract text (golang.org/x/net/html)
+    |  Code: go-tree-sitter structural parsing (functions, classes, etc.)
     |  Commits: git log + git show per-file diffs
     |  Email: eM Client SQLite FTI + preview fallback
     |  Calibre: metadata.db + book file parsing
@@ -189,12 +189,12 @@ Relationships: `collections` 1:N `sources` 1:N `documents`. CASCADE deletes ensu
 | Extension                                                             | Parser                                           | Chunking Strategy                 |
 |-----------------------------------------------------------------------|--------------------------------------------------|-----------------------------------|
 | `.md`                                                                 | Obsidian markdown (frontmatter, wikilinks, tags) | Heading-aware splitting           |
-| `.pdf`                                                                | pymupdf page-by-page extraction                  | Per-page plain chunking           |
-| `.docx`                                                               | python-docx (paragraphs, headings, tables)       | Plain chunking                    |
-| `.epub`                                                               | zipfile + BeautifulSoup chapter extraction       | Per-chapter plain chunking        |
-| `.html` / `.htm`                                                      | BeautifulSoup text extraction                    | Plain chunking                    |
+| `.pdf`                                                                | go-pdfium (WASM/Wazero) page-by-page             | Per-page plain chunking           |
+| `.docx`                                                               | lu4p/cat (paragraphs, headings)                  | Plain chunking                    |
+| `.epub`                                                               | zip + XML chapter extraction                     | Per-chapter plain chunking        |
+| `.html` / `.htm`                                                      | golang.org/x/net/html text extraction            | Plain chunking                    |
 | `.txt` / `.csv` / `.json` / `.yaml` / `.yml`                          | Read as plaintext                                | Plain chunking                    |
-| `.py` / `.go` / `.tf` / `.ts` / `.js` / `.rs` / `.java` / `.c` / `.h` | tree-sitter structural parsing                   | Function/class boundary splitting |
+| `.py` / `.go` / `.tf` / `.ts` / `.js` / `.rs` / `.java` / `.c` / `.h` | go-tree-sitter structural parsing                | Function/class boundary splitting |
 
 ## CLI Commands
 
@@ -239,31 +239,18 @@ Key settings:
 ## Project Structure
 
 ```shell
-src/local_rag/
-  config.py              Configuration loading
-  db.py                  Database init, migrations, helpers
-  embeddings.py          Ollama embedding with batching and timeouts
-  chunker.py             Text chunking strategies
-  search.py              Hybrid search engine with RRF
-  cli.py                 Click CLI entry point
-  mcp_server.py          MCP server for Claude integration
-  parsers/
-    markdown.py          Obsidian markdown parser
-    email.py             eM Client email parser
-    pdf.py               PDF text extraction
-    docx.py              DOCX text extraction
-    epub.py              EPUB text extraction
-    html.py              HTML text extraction
-    plaintext.py         Plaintext reader
-    calibre.py           Calibre metadata.db parser
-    rss.py               NetNewsWire RSS parser
-    code.py              Tree-sitter code parser
-  indexers/
-    base.py              Abstract base indexer
-    obsidian.py          Obsidian vault indexer (all file types)
-    email_indexer.py     eM Client email indexer
-    calibre_indexer.py   Calibre ebook indexer
-    rss_indexer.py       NetNewsWire RSS indexer
-    git_indexer.py       Git repository indexer
-    project.py           Project document indexer
+cmd/local-rag/           CLI entry point (Cobra)
+internal/
+  config/                Configuration loading and defaults
+  db/                    SQLite + sqlite-vec + FTS5 setup and migrations
+  embeddings/            Ollama embedding client
+  chunker/               Text chunking strategies
+  search/                Hybrid search engine (vector + FTS + RRF)
+  parser/                File parsers (markdown, pdf, docx, epub, html, code, ...)
+  indexer/               Source indexers (obsidian, email, calibre, rss, git, project)
+  mcp/                   MCP server (tools, SSE, stdio)
+  gui/                   Fyne menu bar app, settings, log viewer
+scripts/
+  build-app.sh           Create macOS .app bundle
+  build-dmg.sh           Create DMG installer
 ```

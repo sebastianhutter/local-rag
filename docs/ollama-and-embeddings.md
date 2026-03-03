@@ -112,7 +112,7 @@ This means every search requires one Ollama call to embed the query.
 
 ### Vector Storage Format
 
-Embeddings are stored in SQLite as packed binary blobs — each float is serialized as 4 bytes in IEEE 754 format using Python's `struct.pack`. The sqlite-vec extension reads this binary format directly for fast comparison.
+Embeddings are stored in SQLite as packed binary blobs — each float is serialized as 4 bytes in IEEE 754 little-endian format using Go's `encoding/binary`. The sqlite-vec extension reads this binary format directly for fast comparison.
 
 ```shell
 1024 floats × 4 bytes = 4,096 bytes per document chunk
@@ -147,11 +147,11 @@ To switch models:
 3. **Re-index everything** — embeddings from different models are incompatible
 
 ```bash
-uv run local-rag index obsidian --force
-uv run local-rag index email --force
-uv run local-rag index calibre --force
-uv run local-rag index rss --force
-uv run local-rag index repo --force
+local-rag index obsidian --force
+local-rag index email --force
+local-rag index calibre --force
+local-rag index rss --force
+local-rag index group --force
 # Repeat for any project collections as well
 ```
 
