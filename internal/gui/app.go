@@ -2,8 +2,10 @@ package gui
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -17,10 +19,9 @@ import (
 
 // App is the main GUI application.
 type App struct {
-	fyneApp    fyne.App
-	cfg        *config.Config
-	cfgMu      sync.RWMutex
-	logHandler *RingBufferHandler
+	fyneApp fyne.App
+	cfg     *config.Config
+	cfgMu   sync.RWMutex
 
 	mcpService      MCPService
 	indexingService IndexingService
@@ -35,7 +36,10 @@ type App struct {
 
 	// Window references (nil when not open).
 	settingsWin fyne.Window
-	logsWin     fyne.Window
+
+	// Log file path and handle for the file-based log.
+	logPath string
+	logFile *os.File
 
 	// rebuildCh coalesces menu rebuild requests from any goroutine into a
 	// single goroutine that actually calls SetSystemTrayMenu. This avoids
@@ -59,13 +63,22 @@ func Run() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Install ring-buffer slog handler.
-	handler := NewRingBufferHandler(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	slog.SetDefault(slog.New(handler))
+	// Set up log file — truncate on startup so each session starts fresh.
+	logPath := filepath.Join(config.DefaultConfigDir, "local-rag.log")
+	var logWriter io.Writer = os.Stderr
+	var logFile *os.File
+	if f, err := os.Create(logPath); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not create log file %s: %v\n", logPath, err)
+	} else {
+		logFile = f
+		logWriter = io.MultiWriter(os.Stderr, logFile)
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	a := &App{
 		cfg:         cfg,
-		logHandler:  handler,
+		logPath:     logPath,
+		logFile:     logFile,
 		statusLabel: "Loading...",
 		rebuildCh:   make(chan struct{}, 1),
 		done:        make(chan struct{}),
@@ -111,6 +124,9 @@ func Run() error {
 	a.mcpService.Stop()
 	parser.ClosePDFPool()
 	slog.Info("local-rag GUI stopped")
+	if a.logFile != nil {
+		a.logFile.Close()
+	}
 
 	return nil
 }
