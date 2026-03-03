@@ -10,29 +10,31 @@ A fully local, privacy-preserving RAG (Retrieval Augmented Generation) system fo
 
 ```bash
 # Prerequisites
-brew install ollama uv
+brew install ollama go
 ollama pull bge-m3
 
-# Setup (uv automatically manages the venv)
-cd /path/to/local-rag
+# Build
+git clone https://github.com/sebastianhutter/local-rag.git
+cd local-rag
+make build            # binary at bin/local-rag
 
-# Index sources (uv run auto-creates and manages venv)
-uv run local-rag index obsidian
-uv run local-rag index email
-uv run local-rag index calibre
-uv run local-rag index rss
-uv run local-rag index group rustyquill
-uv run local-rag index group                    # all groups
-uv run local-rag index group rustyquill --history  # code + commit history
-uv run local-rag index project "Project Alpha" ~/Documents/project-alpha-docs/
+# Index sources
+local-rag index obsidian
+local-rag index email
+local-rag index calibre
+local-rag index rss
+local-rag index group rustyquill
+local-rag index group                    # all groups
+local-rag index group rustyquill --history  # code + commit history
+local-rag index project "Project Alpha" ~/Documents/project-alpha-docs/
 
 # Search
-uv run local-rag search "kubernetes deployment strategy"
-uv run local-rag search "invoice from supplier" --collection email
-uv run local-rag search "API specification" --collection "Project Alpha"
+local-rag search "kubernetes deployment strategy"
+local-rag search "invoice from supplier" --collection email
+local-rag search "API specification" --collection "Project Alpha"
 
 # Run MCP server (for Claude Desktop / Claude Code integration)
-uv run local-rag serve
+local-rag serve
 ```
 
 ---
@@ -51,7 +53,7 @@ flowchart LR
     end
 
     subgraph Indexer
-        IDX["Python Indexer<br/>chunking + Ollama embed"]
+        IDX["Go Indexer<br/>chunking + Ollama embed"]
     end
 
     subgraph Storage
@@ -99,18 +101,18 @@ flowchart LR
 
 ## Tech Stack
 
-| Component      | Choice                     | Notes                                |
-|----------------|----------------------------|--------------------------------------|
-| Language       | Python 3.13+               |                                      |
-| Database       | SQLite + sqlite-vec + FTS5 | Single file, no server               |
-| Embeddings     | Ollama + bge-m3 (1024d)    | Fully local, no API keys             |
-| PDF parsing    | pymupdf (fitz)             | Best quality for PDF text extraction |
-| EPUB parsing   | zipfile + BeautifulSoup    | Chapter-based extraction             |
-| DOCX parsing   | python-docx                | Read Word documents                  |
-| Code parsing   | tree-sitter                | Structural parsing for 11 languages  |
-| HTML to text   | beautifulsoup4             | Strip HTML from email/RSS bodies     |
-| CLI            | click                      |                                      |
-| MCP server     | mcp (Python SDK)           | Exposes tools to Claude              |
+| Component    | Choice                     | Notes                                  |
+|--------------|----------------------------|----------------------------------------|
+| Language     | Go 1.24+                   | CGO required for SQLite                |
+| Database     | SQLite + sqlite-vec + FTS5 | Single file, no server                 |
+| Embeddings   | Ollama + bge-m3 (1024d)    | Fully local, no API keys               |
+| GUI          | Fyne v2 + systray          | macOS menu bar app                     |
+| MCP          | mcp-go                     | SSE and stdio transports               |
+| PDF          | go-pdfium (WASM/Wazero)    | No CGO needed for PDF                  |
+| DOCX         | lu4p/cat                   | Word document extraction               |
+| Code parsing | go-tree-sitter             | 13 languages with structural splitting |
+| CLI          | Cobra                      | Subcommands, flags, help               |
+| HTML cleanup | golang.org/x/net/html      | Strip tags from email/RSS              |
 
 ---
 
@@ -190,52 +192,30 @@ END;
 ```
 local-rag/
 ├── CLAUDE.md                        # This file
-├── pyproject.toml                   # Package config, dependencies, CLI entry point
+├── Makefile                         # Build targets (build, test, lint, app, dmg)
 ├── README.md
-├── config.example.json              # Example configuration
+├── go.mod / go.sum                  # Go module dependencies
+├── cmd/
+│   └── local-rag/
+│       └── main.go                  # Cobra CLI entry point
 ├── docs/
 │   ├── architecture.md              # System architecture overview
 │   ├── emclient-schema.md           # eM Client SQLite schema documentation
 │   ├── hybrid-search-and-rrf.md     # How hybrid search and RRF work
 │   └── ollama-and-embeddings.md     # Ollama setup and embedding models
-├── src/
-│   └── local_rag/
-│       ├── __init__.py
-│       ├── cli.py                   # Click CLI entry point
-│       ├── config.py                # Load/validate config
-│       ├── db.py                    # Database init, connection, migrations
-│       ├── embeddings.py            # Ollama embedding helpers
-│       ├── chunker.py               # Text chunking strategies (per file type)
-│       ├── search.py                # Hybrid search engine (vector + FTS + RRF)
-│       ├── parsers/
-│       │   ├── __init__.py
-│       │   ├── markdown.py          # Obsidian .md parser (frontmatter, wikilinks, tags)
-│       │   ├── email.py             # eM Client SQLite reader + email parser
-│       │   ├── pdf.py               # PDF text extraction (pymupdf)
-│       │   ├── docx.py              # DOCX text extraction (python-docx)
-│       │   ├── epub.py              # EPUB text extraction (zipfile + BeautifulSoup)
-│       │   ├── html.py              # HTML to text (beautifulsoup4)
-│       │   ├── plaintext.py         # .txt passthrough
-│       │   ├── calibre.py           # Calibre metadata.db parser
-│       │   ├── rss.py               # NetNewsWire RSS article parser
-│       │   └── code.py              # Tree-sitter code parser (11 languages)
-│       ├── indexers/
-│       │   ├── __init__.py
-│       │   ├── base.py              # Abstract base indexer
-│       │   ├── obsidian.py          # Obsidian vault indexer (all file types)
-│       │   ├── email_indexer.py     # eM Client email indexer
-│       │   ├── calibre_indexer.py   # Calibre ebook indexer
-│       │   ├── rss_indexer.py       # NetNewsWire RSS indexer
-│       │   ├── git_indexer.py       # Git repository indexer
-│       │   └── project.py           # Project document indexer
-│       └── mcp_server.py            # MCP server exposing search + index tools
-├── scripts/
-│   └── explore_emclient.py          # One-off: discover eM Client SQLite schema
-└── tests/
-    ├── test_chunker.py
-    ├── test_search.py
-    ├── test_parsers.py
-    └── fixtures/                    # Sample .md, .pdf, .docx files for tests
+├── internal/
+│   ├── config/                      # Configuration loading and defaults
+│   ├── db/                          # SQLite + sqlite-vec + FTS5 setup and migrations
+│   ├── embeddings/                  # Ollama embedding client
+│   ├── chunker/                     # Text chunking strategies (per file type)
+│   ├── search/                      # Hybrid search engine (vector + FTS + RRF)
+│   ├── parser/                      # File parsers (markdown, pdf, docx, epub, html, code, rss, email, calibre)
+│   ├── indexer/                     # Source indexers (obsidian, email, calibre, rss, git, project)
+│   ├── mcp/                         # MCP server (tools, SSE, stdio)
+│   └── gui/                         # Fyne menu bar app, settings, log viewer
+└── scripts/
+    ├── build-app.sh                 # Create macOS .app bundle
+    └── build-dmg.sh                 # Create DMG installer
 ```
 
 ---
@@ -244,12 +224,12 @@ local-rag/
 
 ```bash
 # Indexing
-local-rag index obsidian [--vault PATH]...       # Index Obsidian vaults (from config or args)
+local-rag index obsidian [--vault/-V PATH]...    # Index Obsidian vaults (from config or args)
 local-rag index email                             # Index eM Client emails
-local-rag index calibre [--library PATH]...       # Index Calibre ebook libraries
+local-rag index calibre [--library/-l PATH]...   # Index Calibre ebook libraries
 local-rag index rss                               # Index NetNewsWire RSS articles
 local-rag index group [NAME] [--history]          # Index code group(s), --history for commit history
-local-rag index project "Name" PATH [PATH]...     # Index docs into a named project
+local-rag index project NAME [PATH...]            # Index docs into a named project
 local-rag index all                               # Index all configured sources at once
 
 # All index commands support --force to re-index everything
@@ -265,16 +245,18 @@ local-rag search "query" --after 2025-01-01       # Filter by date
 local-rag search "query" --top 20                 # Number of results
 
 # Collection management
-local-rag collections list                        # List all collections with source/chunk counts
-local-rag collections info "Project A"            # Show details of a collection
-local-rag collections delete "Project A"          # Delete a project collection and all its data
+local-rag collections list              # List all collections with counts
+local-rag collections info NAME         # Show collection details
+local-rag collections delete NAME [-y]  # Delete a collection and all its data
+local-rag collections export NAME       # Export collection metadata as JSON
 
-# Status
-local-rag status                                  # Overall stats: collections, doc counts, DB size, last index times
+# Status and GUI
+local-rag status                        # Overall stats: collections, doc counts, DB size, Ollama status
+local-rag gui                           # Start menu bar app (default when no subcommand)
 
 # MCP server
-local-rag serve                                   # Start MCP server (stdio transport)
-local-rag serve --port 8080                       # Start with HTTP/SSE transport
+local-rag serve                         # Start MCP server (stdio transport)
+local-rag serve --port 31123            # Start with HTTP/SSE transport
 ```
 
 ---
@@ -324,27 +306,31 @@ Config file location: `~/.local-rag/config.json`
 
 ## MCP Server Registration
 
-For **Claude Code**, add to the project's `.mcp.json`:
+### GUI Mode (SSE) — recommended for Claude Code
+
+When the menu bar app is running, its built-in MCP server uses SSE on `http://127.0.0.1:31123/sse`.
+
+Add to the project's `.mcp.json`:
 ```json
 {
   "mcpServers": {
     "local-rag": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/local-rag", "local-rag", "serve"],
-      "env": {}
+      "type": "sse",
+      "url": "http://127.0.0.1:31123/sse"
     }
   }
 }
 ```
+
+### Standalone Mode (stdio) — for Claude Desktop
 
 For **Claude Desktop**, add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
     "local-rag": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/local-rag", "local-rag", "serve"],
-      "env": {}
+      "command": "/path/to/local-rag",
+      "args": ["serve"]
     }
   }
 }
@@ -367,12 +353,13 @@ For **Claude Desktop**, add to `~/Library/Application Support/Claude/claude_desk
 
 ## Coding Standards
 
-- Type hints on all function signatures
-- Dataclasses for structured data (Chunk, SearchResult, CollectionInfo, etc.)
-- Docstrings on public functions
-- No global state — pass db connections and config explicitly
-- Use `logging` module, not print statements
-- Tests for parsers and search logic (chunker edge cases, RRF merging, etc.)
+- Exported types and functions have Go doc comments
+- Structs for structured data (Chunk, SearchResult, etc.) — no untyped maps for public API
+- Error values returned, not panics; wrap errors with `fmt.Errorf("...: %w", err)`
+- No global state — pass `*sql.DB` and `*config.Config` explicitly through call stack
+- Use `log/slog` for structured logging, not `fmt.Print`
+- Build with `make build` and test with `make test` (both require `-tags sqlite_fts5`)
+- Tests live in `_test.go` files alongside the code they test
 
 ---
 
@@ -380,6 +367,8 @@ For **Claude Desktop**, add to `~/Library/Application Support/Claude/claude_desk
 
 - sqlite-vec: https://github.com/asg017/sqlite-vec
 - Ollama embedding docs: https://ollama.com/blog/embedding-models
-- MCP Python SDK: https://github.com/modelcontextprotocol/python-sdk
+- mcp-go: https://github.com/mark3labs/mcp-go
 - MCP specification: https://modelcontextprotocol.io
+- go-pdfium: https://github.com/klippa-app/go-pdfium
+- go-tree-sitter: https://github.com/smacker/go-tree-sitter
 - eM Client forensic schema analysis: https://github.com/SecurityAura/Aura-Research/blob/main/DFIR/BEC/eM%20Client/eMClient.md

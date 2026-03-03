@@ -180,17 +180,25 @@ The `partName='TEXT'` row holds the complete RFC 2822 email headers in `partHead
 
 Dates are stored as .NET ticks — 64-bit integers representing 100-nanosecond intervals since `0001-01-01 00:00:00 UTC`.
 
-Conversion to Python datetime:
+Conversion to a Go `time.Time`:
 
-```python
-from datetime import datetime, timedelta
+```go
+import "time"
 
-DOTNET_EPOCH = datetime(1, 1, 1)
+// .NET epoch starts at 0001-01-01; Unix epoch at 1970-01-01.
+// The gap expressed in 100-ns ticks:
+const unixEpochTicks int64 = 621_355_968_000_000_000
+const ticksPerSecond int64 = 10_000_000
 
-def ticks_to_datetime(ticks: int) -> datetime:
-    return DOTNET_EPOCH + timedelta(microseconds=ticks / 10)
+func ticksToTime(ticks int64) time.Time {
+    if ticks == 0 {
+        return time.Time{}
+    }
+    unixSeconds := (ticks - unixEpochTicks) / ticksPerSecond
+    return time.Unix(unixSeconds, 0).UTC()
+}
 
-# Example: 639052111470000000 → 2026-01-28 15:32:27
+// Example: 639052111470000000 → 2026-01-28 15:32:27 UTC
 ```
 
 A date value of `0` means no date was recorded for that email.

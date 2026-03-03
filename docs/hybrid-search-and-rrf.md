@@ -125,11 +125,11 @@ These values are configurable in `~/.local-rag/config.json`:
 
 ## Implementation Reference
 
-The search pipeline lives in `src/local_rag/search.py`:
+The search pipeline lives in `internal/search/`:
 
-- `_vector_search()` — runs the sqlite-vec nearest-neighbor query
-- `_fts_search()` — runs the FTS5 keyword query
-- `rrf_merge()` — combines both ranked lists using the formula above
-- `search()` — orchestrates the full pipeline: run both searches, merge, apply filters, fetch full document data
+- `VectorSearch()` — runs the sqlite-vec nearest-neighbor query
+- `FTSSearch()` — runs the FTS5 keyword query
+- `RRFMerge()` — combines both ranked lists using the formula above
+- `Search()` — orchestrates the full pipeline: run both searches, merge, apply filters, fetch full document data
 
 All filtering (by collection, source type, date range, sender) happens after the initial search but before the final ranking, so filters don't interfere with the ranking logic itself.
