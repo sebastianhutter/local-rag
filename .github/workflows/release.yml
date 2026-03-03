@@ -53,6 +53,11 @@ jobs:
           VERSION: ${{ steps.version.outputs.VERSION }}
         run: make app
 
+      - name: Free disk space
+        run: |
+          go clean -cache -modcache
+          rm -rf ~/Library/Caches/go-build
+
       - name: Build DMG
         run: make dmg
 
