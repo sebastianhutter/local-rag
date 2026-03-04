@@ -36,5 +36,15 @@
         "rrf_k": 60,
         "vector_weight": 0.7,
         "fts_weight": 0.3
+    },
+    "ocr": {
+        "enabled": true,
+        "languages": [
+            "eng",
+            "deu"
+        ],
+        "max_pages": 50,
+        "max_file_size_mb": 100,
+        "min_word_count": 10
     }
 }
