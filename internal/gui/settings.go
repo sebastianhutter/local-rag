@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -57,11 +58,12 @@ func (a *App) openSettings() {
 	// Work on a copy of the config so cancel discards changes.
 	cfg := *a.cfg
 
-	// Build all 6 tabs.
+	// Build all 7 tabs.
 	generalTab := a.buildGeneralTab(&cfg, w)
 	sourcesTab := a.buildSourcesTab(&cfg, w)
 	codeGroupsTab := a.buildCodeGroupsTab(&cfg, w)
 	searchTab := a.buildSearchTab(&cfg)
+	ocrTab := a.buildOCRTab(&cfg)
 	mcpTab := a.buildMCPTab(&cfg, w)
 	collectionsTab := a.buildCollectionsTab(&cfg, w)
 
@@ -70,6 +72,7 @@ func (a *App) openSettings() {
 		container.NewTabItem("Sources", sourcesTab),
 		container.NewTabItem("Code Groups", codeGroupsTab),
 		container.NewTabItem("Search", searchTab),
+		container.NewTabItem("OCR", ocrTab),
 		container.NewTabItem("MCP & Scheduling", mcpTab),
 		container.NewTabItem("Collections", collectionsTab),
 	)
@@ -374,7 +377,79 @@ func (a *App) buildSearchTab(cfg *config.Config) fyne.CanvasObject {
 }
 
 // ---------------------------------------------------------------------------
-// Tab 5 — MCP & Scheduling
+// Tab 5 — OCR
+// ---------------------------------------------------------------------------
+
+func (a *App) buildOCRTab(cfg *config.Config) fyne.CanvasObject {
+	enabledCheck := widget.NewCheck("Enable OCR fallback for scanned PDFs", func(b bool) {
+		cfg.OCR.Enabled = b
+	})
+	enabledCheck.Checked = cfg.OCR.Enabled
+
+	langEntry := widget.NewEntry()
+	langEntry.SetText(strings.Join(cfg.OCR.Languages, ", "))
+	langEntry.SetPlaceHolder("eng, deu")
+	langEntry.OnChanged = func(s string) {
+		var langs []string
+		for _, l := range strings.Split(s, ",") {
+			l = strings.TrimSpace(l)
+			if l != "" {
+				langs = append(langs, l)
+			}
+		}
+		if len(langs) == 0 {
+			langs = []string{"eng"}
+		}
+		cfg.OCR.Languages = langs
+	}
+
+	maxPagesEntry := widget.NewEntry()
+	maxPagesEntry.SetText(strconv.Itoa(cfg.OCR.MaxPages))
+	maxPagesEntry.Validator = intValidator(1, 10000)
+	maxPagesEntry.OnChanged = func(s string) {
+		if v, err := strconv.Atoi(s); err == nil {
+			cfg.OCR.MaxPages = v
+		}
+	}
+
+	maxSizeEntry := widget.NewEntry()
+	maxSizeEntry.SetText(strconv.Itoa(cfg.OCR.MaxFileSizeMB))
+	maxSizeEntry.Validator = intValidator(1, 10000)
+	maxSizeEntry.OnChanged = func(s string) {
+		if v, err := strconv.Atoi(s); err == nil {
+			cfg.OCR.MaxFileSizeMB = v
+		}
+	}
+
+	minWordsEntry := widget.NewEntry()
+	minWordsEntry.SetText(strconv.Itoa(cfg.OCR.MinWordCount))
+	minWordsEntry.Validator = intValidator(0, 1000)
+	minWordsEntry.OnChanged = func(s string) {
+		if v, err := strconv.Atoi(s); err == nil {
+			cfg.OCR.MinWordCount = v
+		}
+	}
+
+	form := widget.NewForm(
+		widget.NewFormItem("Languages", langEntry),
+		widget.NewFormItem("Max pages", maxPagesEntry),
+		widget.NewFormItem("Max file size (MB)", maxSizeEntry),
+		widget.NewFormItem("Min word count", minWordsEntry),
+	)
+
+	helpLabel := widget.NewLabel("Requires: brew install tesseract\nPages with fewer words than the threshold are rendered and OCR'd via tesseract.")
+	helpLabel.Wrapping = fyne.TextWrapWord
+
+	return container.NewVScroll(container.NewVBox(
+		enabledCheck,
+		form,
+		widget.NewSeparator(),
+		helpLabel,
+	))
+}
+
+// ---------------------------------------------------------------------------
+// Tab 6 — MCP & Scheduling
 // ---------------------------------------------------------------------------
 
 func (a *App) buildMCPTab(cfg *config.Config, w fyne.Window) fyne.CanvasObject {

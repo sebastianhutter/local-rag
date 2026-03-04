@@ -202,7 +202,17 @@ func extractAndChunkBook(book *parser.CalibreBook, filePath, format string, cfg 
 			}
 		case "pdf":
 			sectionLabel = "page"
-			pages := parser.ParsePDF(filePath)
+			var ocrOpts *parser.OCROptions
+			if cfg.OCR.Enabled {
+				ocrOpts = &parser.OCROptions{
+					Enabled:       true,
+					Languages:     cfg.OCR.Languages,
+					MaxPages:      cfg.OCR.MaxPages,
+					MaxFileSizeMB: cfg.OCR.MaxFileSizeMB,
+					MinWordCount:  cfg.OCR.MinWordCount,
+				}
+			}
+			pages := parser.ParsePDF(filePath, ocrOpts)
 			for _, pg := range pages {
 				sectionTitle := fmt.Sprintf("%s (%s %d)", book.Title, sectionLabel, pg.PageNumber)
 				sectionChunks := chunker.ChunkPlain(pg.Text, sectionTitle, chunkSize, overlap)
@@ -210,6 +220,9 @@ func extractAndChunkBook(book *parser.CalibreBook, filePath, format string, cfg 
 					sectionChunks[j].ChunkIndex = chunkIdx
 					meta := copyMeta(bookMeta)
 					meta[sectionLabel+"_number"] = pg.PageNumber
+					if pg.OCR {
+						meta["ocr"] = true
+					}
 					sectionChunks[j].Metadata = meta
 					chunks = append(chunks, sectionChunks[j])
 					chunkIdx++
