@@ -149,7 +149,17 @@ func parseAndChunk(path, sourceType string, cfg *config.Config) []chunker.Chunk 
 		return chunks
 
 	case "pdf":
-		pages := parser.ParsePDF(path)
+		var ocrOpts *parser.OCROptions
+		if cfg.OCR.Enabled {
+			ocrOpts = &parser.OCROptions{
+				Enabled:       true,
+				Languages:     cfg.OCR.Languages,
+				MaxPages:      cfg.OCR.MaxPages,
+				MaxFileSizeMB: cfg.OCR.MaxFileSizeMB,
+				MinWordCount:  cfg.OCR.MinWordCount,
+			}
+		}
+		pages := parser.ParsePDF(path, ocrOpts)
 		if len(pages) == 0 {
 			return nil
 		}
@@ -161,6 +171,9 @@ func parseAndChunk(path, sourceType string, cfg *config.Config) []chunker.Chunk 
 			for i := range pageChunks {
 				pageChunks[i].ChunkIndex = chunkIdx
 				pageChunks[i].Metadata["page_number"] = page.PageNumber
+				if page.OCR {
+					pageChunks[i].Metadata["ocr"] = true
+				}
 				chunks = append(chunks, pageChunks[i])
 				chunkIdx++
 			}

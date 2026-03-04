@@ -32,6 +32,9 @@ xattr -cr /Applications/local-rag.app
 brew install ollama go
 ollama pull bge-m3
 
+# Optional: OCR support for scanned PDFs
+brew install tesseract tesseract-lang
+
 # Build
 git clone https://github.com/sebastianhutter/local-rag-go.git
 cd local-rag-go
@@ -40,7 +43,7 @@ make app              # macOS .app bundle at bin/local-rag.app
 make dmg              # DMG installer at bin/local-rag.dmg
 ```
 
-Requires Go 1.24+, CGO enabled (for SQLite), and macOS (for `sips`/`iconutil`/`hdiutil`).
+Requires Go 1.24+, CGO enabled (for SQLite), and macOS (for `sips`/`iconutil`/`hdiutil`). Tesseract is optional — only needed for OCR on scanned/image-only PDFs.
 
 ## Quick Start
 
@@ -211,6 +214,11 @@ Config file: `~/.local-rag/config.json`
 | `search_defaults.rrf_k`             | `60`                                      | Reciprocal Rank Fusion parameter         |
 | `search_defaults.vector_weight`     | `0.7`                                     | Weight for vector similarity             |
 | `search_defaults.fts_weight`        | `0.3`                                     | Weight for full-text search              |
+| `ocr.enabled`                       | `false`                                   | Enable OCR fallback for scanned PDFs     |
+| `ocr.languages`                     | `["eng"]`                                 | Tesseract languages (e.g. `["eng","deu"]`) |
+| `ocr.max_pages`                     | `50`                                      | Skip OCR if PDF exceeds this page count  |
+| `ocr.max_file_size_mb`              | `100`                                     | Skip OCR if file exceeds this size       |
+| `ocr.min_word_count`                | `10`                                      | OCR pages with fewer extracted words     |
 | `gui.auto_start_mcp`                | `true`                                    | Start MCP server when GUI launches       |
 | `gui.mcp_port`                      | `31123`                                   | SSE server port                          |
 | `gui.auto_reindex`                  | `false`                                   | Enable periodic re-indexing              |
@@ -227,6 +235,7 @@ Config file: `~/.local-rag/config.json`
 | GUI          | Fyne v2 + systray          | macOS menu bar app                     |
 | MCP          | mcp-go                     | SSE and stdio transports               |
 | PDF          | go-pdfium (WASM/Wazero)    | No CGO needed for PDF                  |
+| PDF OCR      | tesseract (optional)       | Fallback for scanned/image-only PDFs   |
 | DOCX         | lu4p/cat                   | Word document extraction               |
 | Code parsing | go-tree-sitter             | 13 languages with structural splitting |
 | CLI          | Cobra                      | Subcommands, flags, help               |

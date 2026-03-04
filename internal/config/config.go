@@ -24,6 +24,15 @@ type SearchDefaults struct {
 	FTSWeight    float64 `json:"fts_weight"`
 }
 
+// OCRConfig holds settings for optional tesseract-based OCR fallback on scanned PDFs.
+type OCRConfig struct {
+	Enabled       bool     `json:"enabled"`           // default: false
+	Languages     []string `json:"languages"`         // default: ["eng"], joined as "eng+deu" for tesseract
+	MaxPages      int      `json:"max_pages"`         // default: 50, skip OCR if PDF exceeds this
+	MaxFileSizeMB int      `json:"max_file_size_mb"`  // default: 100, skip OCR if file exceeds this
+	MinWordCount  int      `json:"min_word_count"`    // default: 10, OCR pages with fewer words than this
+}
+
 // GUIConfig holds GUI-specific settings.
 type GUIConfig struct {
 	AutoStartMCP             bool `json:"auto_start_mcp"`
@@ -50,6 +59,7 @@ type Config struct {
 	GitHistoryInMonths        int                 `json:"git_history_in_months"`
 	GitCommitSubjectBlacklist []string            `json:"git_commit_subject_blacklist"`
 	SearchDefaults            SearchDefaults      `json:"search_defaults"`
+	OCR                       OCRConfig           `json:"ocr"`
 	GUI                       GUIConfig           `json:"gui"`
 
 	// disabledSet is a cached lookup set built from DisabledCollections.
@@ -182,6 +192,7 @@ func Save(cfg *Config, path string) error {
 	existing["git_history_in_months"] = cfg.GitHistoryInMonths
 	existing["git_commit_subject_blacklist"] = cfg.GitCommitSubjectBlacklist
 	existing["search_defaults"] = cfg.SearchDefaults
+	existing["ocr"] = cfg.OCR
 	existing["gui"] = cfg.GUI
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -227,6 +238,13 @@ func defaults() *Config {
 			RRFK:         60,
 			VectorWeight: 0.7,
 			FTSWeight:    0.3,
+		},
+		OCR: OCRConfig{
+			Enabled:       false,
+			Languages:     []string{"eng"},
+			MaxPages:      50,
+			MaxFileSizeMB: 100,
+			MinWordCount:  10,
 		},
 		GUI: GUIConfig{
 			AutoStartMCP:             true,

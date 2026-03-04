@@ -13,6 +13,9 @@ A fully local, privacy-preserving RAG (Retrieval Augmented Generation) system fo
 brew install ollama go
 ollama pull bge-m3
 
+# Optional: OCR support for scanned PDFs
+brew install tesseract tesseract-lang
+
 # Build
 git clone https://github.com/sebastianhutter/local-rag.git
 cd local-rag
@@ -109,6 +112,7 @@ flowchart LR
 | GUI          | Fyne v2 + systray          | macOS menu bar app                     |
 | MCP          | mcp-go                     | SSE and stdio transports               |
 | PDF          | go-pdfium (WASM/Wazero)    | No CGO needed for PDF                  |
+| PDF OCR      | tesseract (optional)       | Fallback for scanned/image-only PDFs   |
 | DOCX         | lu4p/cat                   | Word document extraction               |
 | Code parsing | go-tree-sitter             | 13 languages with structural splitting |
 | CLI          | Cobra                      | Subcommands, flags, help               |
@@ -298,6 +302,13 @@ Config file location: `~/.local-rag/config.json`
     "rrf_k": 60,
     "vector_weight": 0.7,
     "fts_weight": 0.3
+  },
+  "ocr": {
+    "enabled": false,
+    "languages": ["eng"],
+    "max_pages": 50,
+    "max_file_size_mb": 100,
+    "min_word_count": 10
   }
 }
 ```
