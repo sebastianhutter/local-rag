@@ -2,12 +2,10 @@ package indexer
 
 import (
 	"database/sql"
-	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/sebastianhutter/local-rag-go/internal/config"
 	"github.com/sebastianhutter/local-rag-go/internal/parser"
@@ -284,7 +282,9 @@ func pruneCalibreSources(conn *sql.DB, cfg *config.Config, collectionID int64) *
 	return result
 }
 
-// pruneCodeSources removes stale code files and expired commits.
+// pruneCodeSources removes stale code files from code collections.
+// Commit history (git:// URIs) is never pruned — those commits happened
+// and their indexed content remains valid reference material.
 func pruneCodeSources(conn *sql.DB, cfg *config.Config, collectionID int64) *PruneResult {
 	result := &PruneResult{}
 
@@ -295,63 +295,18 @@ func pruneCodeSources(conn *sql.DB, cfg *config.Config, collectionID int64) *Pru
 		return result
 	}
 
-	historyMonths := cfg.GitHistoryInMonths
-	if historyMonths <= 0 {
-		historyMonths = 6
-	}
-	cutoff := time.Now().AddDate(0, -historyMonths, 0)
-
 	for _, s := range sources {
-		result.Checked++
-
+		// Skip commit sources — history is preserved
 		if strings.HasPrefix(s.SourcePath, "git://") {
-			// Commit source — check if date is within the configured history window
-			if shouldPruneCommit(conn, s.ID, cutoff) {
-				slog.Info("pruning expired commit", "path", s.SourcePath)
-				deleteSourceByID(conn, s.ID)
-				result.Pruned++
-			}
-		} else {
-			// File source — check file existence
-			if _, err := os.Stat(s.SourcePath); os.IsNotExist(err) {
-				slog.Info("pruning stale code file", "path", s.SourcePath)
-				deleteSourceByID(conn, s.ID)
-				result.Pruned++
-			}
+			continue
+		}
+		result.Checked++
+		if _, err := os.Stat(s.SourcePath); os.IsNotExist(err) {
+			slog.Info("pruning stale code file", "path", s.SourcePath)
+			deleteSourceByID(conn, s.ID)
+			result.Pruned++
 		}
 	}
 
 	return result
-}
-
-// shouldPruneCommit checks if a commit source is older than the cutoff date.
-func shouldPruneCommit(conn *sql.DB, sourceID int64, cutoff time.Time) bool {
-	var metaJSON sql.NullString
-	err := conn.QueryRow(
-		"SELECT metadata FROM documents WHERE source_id = ? LIMIT 1", sourceID,
-	).Scan(&metaJSON)
-	if err != nil || !metaJSON.Valid {
-		return false // Can't determine date, keep it
-	}
-
-	var meta map[string]any
-	if json.Unmarshal([]byte(metaJSON.String), &meta) != nil {
-		return false
-	}
-
-	dateStr, ok := meta["author_date"].(string)
-	if !ok || dateStr == "" {
-		return false
-	}
-
-	t, err := time.Parse(time.RFC3339, dateStr)
-	if err != nil {
-		// Try ISO format without timezone
-		t, err = time.Parse("2006-01-02T15:04:05-07:00", dateStr)
-		if err != nil {
-			return false
-		}
-	}
-
-	return t.Before(cutoff)
 }

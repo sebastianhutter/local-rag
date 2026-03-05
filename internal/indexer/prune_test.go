@@ -1,11 +1,9 @@
 package indexer
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/sebastianhutter/local-rag-go/internal/config"
 )
@@ -183,44 +181,37 @@ func TestPruneCollectionNonexistent(t *testing.T) {
 	}
 }
 
-func TestShouldPruneCommit(t *testing.T) {
+func TestPruneCodeSkipsCommits(t *testing.T) {
 	conn := setupTestDB(t)
 	collID := getOrCreate(conn, "code-group", "code")
+	cfg := &config.Config{GitHistoryInMonths: 6}
 
-	// Insert a commit source with old metadata
-	res, _ := conn.Exec(
-		"INSERT INTO sources (collection_id, source_type, source_path, last_indexed_at) VALUES (?, 'commit', 'git:///repo#old', datetime('now'))",
+	// Insert a commit source (git:// URI)
+	conn.Exec(
+		"INSERT INTO sources (collection_id, source_type, source_path, last_indexed_at) VALUES (?, 'commit', 'git:///repo#abc123', datetime('now'))",
 		collID,
 	)
-	oldSourceID, _ := res.LastInsertId()
 
-	oldDate := time.Now().AddDate(0, -12, 0).Format(time.RFC3339) // 12 months ago
-	oldMeta, _ := json.Marshal(map[string]any{"author_date": oldDate})
+	// Insert a code file source that doesn't exist on disk
 	conn.Exec(
-		"INSERT INTO documents (source_id, collection_id, chunk_index, title, content, metadata) VALUES (?, ?, 0, 'commit', 'content', ?)",
-		oldSourceID, collID, string(oldMeta),
-	)
-
-	// Insert a commit source with recent metadata
-	res, _ = conn.Exec(
-		"INSERT INTO sources (collection_id, source_type, source_path, last_indexed_at) VALUES (?, 'commit', 'git:///repo#new', datetime('now'))",
+		"INSERT INTO sources (collection_id, source_type, source_path, last_indexed_at) VALUES (?, 'code', '/nonexistent/file.go', datetime('now'))",
 		collID,
 	)
-	newSourceID, _ := res.LastInsertId()
 
-	newDate := time.Now().AddDate(0, -1, 0).Format(time.RFC3339) // 1 month ago
-	newMeta, _ := json.Marshal(map[string]any{"author_date": newDate})
-	conn.Exec(
-		"INSERT INTO documents (source_id, collection_id, chunk_index, title, content, metadata) VALUES (?, ?, 0, 'commit', 'content', ?)",
-		newSourceID, collID, string(newMeta),
-	)
+	result := pruneCodeSources(conn, cfg, collID)
 
-	cutoff := time.Now().AddDate(0, -6, 0) // 6 months ago
-
-	if !shouldPruneCommit(conn, oldSourceID, cutoff) {
-		t.Error("old commit (12 months ago) should be pruned with 6-month cutoff")
+	// Only the file source should be checked, not the commit
+	if result.Checked != 1 {
+		t.Errorf("expected 1 checked (file only), got %d", result.Checked)
 	}
-	if shouldPruneCommit(conn, newSourceID, cutoff) {
-		t.Error("recent commit (1 month ago) should not be pruned with 6-month cutoff")
+	if result.Pruned != 1 {
+		t.Errorf("expected 1 pruned (missing file), got %d", result.Pruned)
+	}
+
+	// Commit source should still exist
+	var count int
+	conn.QueryRow("SELECT COUNT(*) FROM sources WHERE collection_id = ? AND source_path = 'git:///repo#abc123'", collID).Scan(&count)
+	if count != 1 {
+		t.Error("commit source should never be pruned")
 	}
 }
