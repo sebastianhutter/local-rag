@@ -208,6 +208,42 @@ func handleRagIndex(ctx context.Context, request mcp.CallToolRequest) (*mcp.Call
 	return mcp.NewToolResultText(string(data)), nil
 }
 
+// --- rag_prune ---
+
+func handleRagPrune(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	cfg, conn, err := openDB()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	defer conn.Close()
+
+	collection := request.GetString("collection", "")
+
+	var result *indexer.PruneResult
+	if collection != "" {
+		result = indexer.PruneCollection(conn, cfg, collection)
+	} else {
+		result = indexer.PruneAll(conn, cfg)
+	}
+
+	output := map[string]any{
+		"pruned":  result.Pruned,
+		"checked": result.Checked,
+		"errors":  result.Errors,
+	}
+	if collection != "" {
+		output["collection"] = collection
+	} else {
+		output["collection"] = "all"
+	}
+	if len(result.ErrorMessages) > 0 {
+		output["error_messages"] = result.ErrorMessages
+	}
+
+	data, _ := json.MarshalIndent(output, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
 // --- rag_collection_info ---
 
 func handleRagCollectionInfo(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {

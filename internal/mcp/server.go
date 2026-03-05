@@ -24,6 +24,7 @@ func CreateServer() *server.MCPServer {
 		server.ServerTool{Tool: ragListCollectionsTool, Handler: handleRagListCollections},
 		server.ServerTool{Tool: ragIndexTool, Handler: handleRagIndex},
 		server.ServerTool{Tool: ragCollectionInfoTool, Handler: handleRagCollectionInfo},
+		server.ServerTool{Tool: ragPruneTool, Handler: handleRagPrune},
 	)
 
 	return s
@@ -89,6 +90,16 @@ var ragIndexTool = mcp.NewTool("rag_index",
 		mcp.Description("Collection name ('obsidian', 'email', 'calibre', 'rss', code group name, or project name)")),
 	mcp.WithString("path",
 		mcp.Description("Path to index (required for project collections)")),
+)
+
+var ragPruneTool = mcp.NewTool("rag_prune",
+	mcp.WithDescription(
+		"Remove stale indexed entries whose originals no longer exist. "+
+			"Prunes deleted files from Obsidian/projects, removed emails from eM Client, "+
+			"purged RSS articles from NetNewsWire, removed books from Calibre, "+
+			"and deleted code files from repositories."),
+	mcp.WithString("collection",
+		mcp.Description("Collection name to prune. Omit to prune all collections.")),
 )
 
 var ragCollectionInfoTool = mcp.NewTool("rag_collection_info",

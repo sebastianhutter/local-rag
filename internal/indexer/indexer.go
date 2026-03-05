@@ -369,6 +369,74 @@ func indexSingleFile(conn *sql.DB, cfg *config.Config, filePath string, collecti
 	return true, nil
 }
 
+// PruneResult summarises a pruning run.
+type PruneResult struct {
+	Pruned        int
+	Checked       int
+	Errors        int
+	ErrorMessages []string
+}
+
+func (r *PruneResult) String() string {
+	return fmt.Sprintf("Pruned: %d, Checked: %d, Errors: %d", r.Pruned, r.Checked, r.Errors)
+}
+
+// Merge adds another result into this one.
+func (r *PruneResult) Merge(other *PruneResult) {
+	r.Pruned += other.Pruned
+	r.Checked += other.Checked
+	r.Errors += other.Errors
+	r.ErrorMessages = append(r.ErrorMessages, other.ErrorMessages...)
+}
+
+// sourceInfo holds basic info about an indexed source row.
+type sourceInfo struct {
+	ID         int64
+	SourcePath string
+	SourceType string
+}
+
+// sourcesForCollection returns all sources for a collection.
+func sourcesForCollection(conn *sql.DB, collectionID int64) ([]sourceInfo, error) {
+	rows, err := conn.Query(
+		"SELECT id, source_path, source_type FROM sources WHERE collection_id = ?",
+		collectionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query sources: %w", err)
+	}
+	defer rows.Close()
+
+	var sources []sourceInfo
+	for rows.Next() {
+		var s sourceInfo
+		if err := rows.Scan(&s.ID, &s.SourcePath, &s.SourceType); err != nil {
+			continue
+		}
+		sources = append(sources, s)
+	}
+	return sources, rows.Err()
+}
+
+// deleteSourceByID deletes a source and all its documents and vectors by source ID.
+func deleteSourceByID(conn *sql.DB, sourceID int64) {
+	deleteOldDocs(conn, sourceID)
+	conn.Exec("DELETE FROM sources WHERE id = ?", sourceID)
+}
+
+// deleteSource deletes a source by collection ID and source path.
+func deleteSource(conn *sql.DB, collectionID int64, sourcePath string) {
+	var sourceID sql.NullInt64
+	err := conn.QueryRow(
+		"SELECT id FROM sources WHERE collection_id = ? AND source_path = ?",
+		collectionID, sourcePath,
+	).Scan(&sourceID)
+	if err != nil || !sourceID.Valid {
+		return
+	}
+	deleteSourceByID(conn, sourceID.Int64)
+}
+
 // IndexProject indexes documents from file paths into a named project collection.
 func IndexProject(conn *sql.DB, cfg *config.Config, collectionName string, paths []string, force bool, progress ProgressCallback) *IndexResult {
 	collectionID := getOrCreate(conn, collectionName, "project")
