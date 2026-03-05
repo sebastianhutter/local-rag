@@ -16,6 +16,7 @@ import (
 )
 
 var forceIndex bool
+var noPrune bool
 
 var indexCmd = &cobra.Command{
 	Use:   "index",
@@ -53,6 +54,7 @@ var indexObsidianCmd = &cobra.Command{
 		cfg.ObsidianVaults = vaults
 		defer func() { cfg.ObsidianVaults = origVaults }()
 
+		autoPrune(conn, cfg, "obsidian")
 		result := indexer.IndexObsidian(conn, cfg, forceIndex, progressCallback("obsidian"))
 		printResult("Obsidian", result)
 		return nil
@@ -210,6 +212,7 @@ var indexGroupCmd = &cobra.Command{
 				continue
 			}
 
+			autoPrune(conn, cfg, groupName)
 			repos := cfg.CodeGroups[groupName]
 			for _, repoPath := range repos {
 				fmt.Printf("%s: %s\n", groupName, repoPath)
@@ -232,6 +235,16 @@ var indexAllCmd = &cobra.Command{
 			return err
 		}
 		defer conn.Close()
+
+		// Auto-prune obsidian and code collections before indexing
+		if !noPrune {
+			autoPrune(conn, cfg, "obsidian")
+			for groupName := range cfg.CodeGroups {
+				if cfg.IsCollectionEnabled(groupName) {
+					autoPrune(conn, cfg, groupName)
+				}
+			}
+		}
 
 		type indexSource struct {
 			label string
@@ -342,6 +355,7 @@ var indexAllCmd = &cobra.Command{
 
 func init() {
 	indexCmd.PersistentFlags().BoolVar(&forceIndex, "force", false, "Force re-index all content")
+	indexCmd.PersistentFlags().BoolVar(&noPrune, "no-prune", false, "Skip automatic pruning of stale sources before indexing")
 
 	indexObsidianCmd.Flags().StringArrayVarP(&obsidianVaults, "vault", "V", nil, "Vault path(s)")
 	indexCalibreCmd.Flags().StringArrayVarP(&calibreLibraries, "library", "l", nil, "Library path(s)")
@@ -420,4 +434,14 @@ func loadCollectionPaths(conn *sql.DB, name string) []string {
 
 func parseJSON(data string, v any) error {
 	return json.Unmarshal([]byte(data), v)
+}
+
+func autoPrune(conn *sql.DB, cfg *config.Config, collectionName string) {
+	if noPrune {
+		return
+	}
+	result := indexer.PruneCollection(conn, cfg, collectionName)
+	if result.Pruned > 0 {
+		fmt.Printf("Pruned %d stale source(s) from %s\n", result.Pruned, collectionName)
+	}
 }

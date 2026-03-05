@@ -47,6 +47,36 @@ func FindRSSAccountDirs(basePath string) []string {
 	return dirs
 }
 
+// CollectArticleIDs returns all article IDs from a NetNewsWire account directory.
+// This is much lighter than ParseArticles since it only reads IDs.
+func CollectArticleIDs(accountDir string) ([]string, error) {
+	dbPath := filepath.Join(accountDir, "DB.sqlite3")
+	if !fileExists(dbPath) {
+		return nil, fmt.Errorf("DB.sqlite3 not found in %s", accountDir)
+	}
+
+	conn, err := openReadOnly(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	rows, err := conn.Query("SELECT articleID FROM articles")
+	if err != nil {
+		return nil, fmt.Errorf("query article IDs: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids, rows.Err()
+}
+
 // ParseArticles parses RSS articles from a NetNewsWire account directory.
 func ParseArticles(accountDir string, sinceTS float64) ([]*Article, error) {
 	dbPath := filepath.Join(accountDir, "DB.sqlite3")

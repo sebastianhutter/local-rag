@@ -647,19 +647,6 @@ func shouldExclude(relPath string) bool {
 	return false
 }
 
-func deleteSource(conn *sql.DB, collectionID int64, sourcePath string) {
-	var sourceID sql.NullInt64
-	err := conn.QueryRow(
-		"SELECT id FROM sources WHERE collection_id = ? AND source_path = ?",
-		collectionID, sourcePath,
-	).Scan(&sourceID)
-	if err != nil || !sourceID.Valid {
-		return
-	}
-	deleteOldDocs(conn, sourceID.Int64)
-	conn.Exec("DELETE FROM sources WHERE id = ?", sourceID.Int64)
-}
-
 func parseWatermarks(description string) map[string]string {
 	if description == "" {
 		return map[string]string{}

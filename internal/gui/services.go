@@ -182,6 +182,15 @@ func (s *IndexingService) IndexAll(cfg *config.Config, onComplete func(error)) {
 	}
 	defer conn.Close()
 
+	// Auto-prune obsidian and code collections before indexing
+	s.setLabel("pruning")
+	indexer.PruneCollection(conn, cfg, "obsidian")
+	for groupName := range cfg.CodeGroups {
+		if cfg.IsCollectionEnabled(groupName) {
+			indexer.PruneCollection(conn, cfg, groupName)
+		}
+	}
+
 	collections := []struct {
 		label string
 		run   func()
@@ -265,6 +274,13 @@ func (s *IndexingService) IndexCollection(name string, cfg *config.Config, onCom
 		return
 	}
 	defer conn.Close()
+
+	// Auto-prune for obsidian and code collections only
+	if name == "obsidian" {
+		indexer.PruneCollection(conn, cfg, name)
+	} else if _, isCode := cfg.CodeGroups[name]; isCode {
+		indexer.PruneCollection(conn, cfg, name)
+	}
 
 	switch name {
 	case "obsidian":
