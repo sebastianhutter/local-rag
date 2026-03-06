@@ -102,4 +102,14 @@ func TestFiltersHasFilters(t *testing.T) {
 	if !withSender.hasFilters() {
 		t.Error("filters with sender should return true")
 	}
+
+	withMeta := &Filters{MetadataFilters: map[string]string{"source": "jira"}}
+	if !withMeta.hasFilters() {
+		t.Error("filters with metadata should return true")
+	}
+
+	emptyMeta := &Filters{MetadataFilters: map[string]string{}}
+	if emptyMeta.hasFilters() {
+		t.Error("filters with empty metadata map should return false")
+	}
 }

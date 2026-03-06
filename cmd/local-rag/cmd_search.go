@@ -23,6 +23,7 @@ var (
 	searchAfter      string
 	searchBefore     string
 	searchTop        int
+	searchMeta       []string
 )
 
 var searchCmd = &cobra.Command{
@@ -53,13 +54,23 @@ var searchCmd = &cobra.Command{
 			return fmt.Errorf("failed to embed query (is Ollama running?): %w", err)
 		}
 
+		metadataFilters := make(map[string]string)
+		for _, m := range searchMeta {
+			parts := strings.SplitN(m, "=", 2)
+			if len(parts) != 2 {
+				return fmt.Errorf("invalid --meta format %q, expected key=value", m)
+			}
+			metadataFilters[parts[0]] = parts[1]
+		}
+
 		filters := &search.Filters{
-			Collection: searchCollection,
-			SourceType: searchType,
-			Sender:     searchFrom,
-			Author:     searchAuthor,
-			DateFrom:   searchAfter,
-			DateTo:     searchBefore,
+			Collection:      searchCollection,
+			SourceType:      searchType,
+			Sender:          searchFrom,
+			Author:          searchAuthor,
+			DateFrom:        searchAfter,
+			DateTo:          searchBefore,
+			MetadataFilters: metadataFilters,
 		}
 
 		results, err := search.Search(conn, queryEmbedding, query, searchTop, filters, cfg)
@@ -102,6 +113,7 @@ func init() {
 	searchCmd.Flags().StringVar(&searchAfter, "after", "", "Only results after this date (YYYY-MM-DD)")
 	searchCmd.Flags().StringVar(&searchBefore, "before", "", "Only results before this date (YYYY-MM-DD)")
 	searchCmd.Flags().IntVar(&searchTop, "top", 10, "Number of results")
+	searchCmd.Flags().StringSliceVarP(&searchMeta, "meta", "m", nil, "Filter by metadata field (key=value, repeatable)")
 
 	rootCmd.AddCommand(searchCmd)
 }

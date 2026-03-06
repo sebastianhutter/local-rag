@@ -51,13 +51,21 @@ func handleRagSearch(ctx context.Context, request mcp.CallToolRequest) (*mcp.Cal
 
 	topK := request.GetInt("top_k", 10)
 
+	metadataFilters := make(map[string]string)
+	if mf, ok := request.GetArguments()["metadata_filter"].(map[string]any); ok {
+		for k, v := range mf {
+			metadataFilters[k] = fmt.Sprintf("%v", v)
+		}
+	}
+
 	filters := &search.Filters{
-		Collection: request.GetString("collection", ""),
-		SourceType: request.GetString("source_type", ""),
-		DateFrom:   request.GetString("date_from", ""),
-		DateTo:     request.GetString("date_to", ""),
-		Sender:     request.GetString("sender", ""),
-		Author:     request.GetString("author", ""),
+		Collection:      request.GetString("collection", ""),
+		SourceType:      request.GetString("source_type", ""),
+		DateFrom:        request.GetString("date_from", ""),
+		DateTo:          request.GetString("date_to", ""),
+		Sender:          request.GetString("sender", ""),
+		Author:          request.GetString("author", ""),
+		MetadataFilters: metadataFilters,
 	}
 
 	queryEmbedding, err := embeddings.GetEmbedding(ctx, query, cfg.EmbeddingModel)

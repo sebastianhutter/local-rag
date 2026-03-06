@@ -52,7 +52,8 @@ var ragSearchTool = mcp.NewTool("rag_search",
 	mcp.WithDescription(
 		"Search personal knowledge using hybrid vector + full-text search with "+
 			"Reciprocal Rank Fusion. Searches across all indexed collections by default, "+
-			"combining semantic similarity with keyword matching."),
+			"combining semantic similarity with keyword matching. "+
+			"Supports filtering by arbitrary metadata fields via metadata_filter parameter."),
 	mcp.WithString("query",
 		mcp.Required(),
 		mcp.Description("Search query text (natural language or keywords)")),
@@ -71,6 +72,10 @@ var ragSearchTool = mcp.NewTool("rag_search",
 		mcp.Description("Filter by email sender (case-insensitive substring)")),
 	mcp.WithString("author",
 		mcp.Description("Filter by book author (case-insensitive substring)")),
+	mcp.WithObject("metadata_filter",
+		mcp.Description("Filter by arbitrary metadata fields. JSON object of key-value string pairs. "+
+			"Matches are case-insensitive substring for strings, element-wise for arrays. "+
+			"Example: {\"source\": \"jira\", \"issue_key\": \"CB-123\"}")),
 )
 
 var ragListCollectionsTool = mcp.NewTool("rag_list_collections",

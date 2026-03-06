@@ -244,8 +244,12 @@ local-rag search "query" --collection obsidian    # Search specific collection
 local-rag search "query" --collection "Project A" # Search a project
 local-rag search "query" --type pdf               # Filter by source type
 local-rag search "query" --from "sender@mail.com" # Filter by email sender
+local-rag search "query" --meta source=jira        # Filter by metadata field
+local-rag search "query" --meta source=confluence  # Jira/Confluence frontmatter
 local-rag search "query" --author "Author Name"   # Filter by book author
 local-rag search "query" --after 2025-01-01       # Filter by date
+local-rag search "query" --meta source=jira       # Filter by metadata field
+local-rag search "query" --meta issue_key=CB-123  # Filter by specific metadata value
 local-rag search "query" --top 20                 # Number of results
 
 # Collection management
@@ -264,6 +268,9 @@ local-rag gui                           # Start menu bar app (default when no su
 # MCP server
 local-rag serve                         # Start MCP server (stdio transport)
 local-rag serve --port 31123            # Start with HTTP/SSE transport
+
+# MCP tools support metadata_filter for arbitrary metadata filtering:
+# rag_search with metadata_filter: {"source": "jira"} filters by frontmatter fields
 ```
 
 ---
