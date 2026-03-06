@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -247,13 +249,187 @@ var collectionsExportCmd = &cobra.Command{
 	},
 }
 
+// --- collections paths ---
+
+var pathsCmd = &cobra.Command{
+	Use:   "paths",
+	Short: "Manage collection paths",
+}
+
+var pathsListCmd = &cobra.Command{
+	Use:   "list NAME",
+	Short: "List stored paths for a collection",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := args[0]
+		cfg, err := config.Load("")
+		if err != nil {
+			return err
+		}
+		conn, err := db.Open(cfg.ExpandedDBPath())
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+
+		paths, err := db.GetCollectionPaths(conn, name)
+		if err != nil {
+			return err
+		}
+		if len(paths) == 0 {
+			return fmt.Errorf("no paths stored for collection %q", name)
+		}
+		for _, p := range paths {
+			fmt.Println(p)
+		}
+		return nil
+	},
+}
+
+var pathsAddCmd = &cobra.Command{
+	Use:   "add NAME PATH...",
+	Short: "Add paths to a collection",
+	Args:  cobra.MinimumNArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := args[0]
+		newPaths := args[1:]
+
+		cfg, err := config.Load("")
+		if err != nil {
+			return err
+		}
+		conn, err := db.Open(cfg.ExpandedDBPath())
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+
+		if err := db.InitSchema(conn, cfg.EmbeddingDimensions); err != nil {
+			return err
+		}
+
+		// Resolve paths to absolute
+		resolved := make([]string, 0, len(newPaths))
+		for _, p := range newPaths {
+			p = expandHome(p)
+			abs, err := filepath.Abs(p)
+			if err != nil {
+				return fmt.Errorf("resolve path %q: %w", p, err)
+			}
+			resolved = append(resolved, abs)
+		}
+
+		// Load existing paths (collection may not exist yet)
+		existing, _ := db.GetCollectionPaths(conn, name)
+
+		// Merge and deduplicate
+		seen := make(map[string]bool, len(existing))
+		for _, p := range existing {
+			seen[p] = true
+		}
+		merged := append([]string{}, existing...)
+		for _, p := range resolved {
+			if !seen[p] {
+				merged = append(merged, p)
+				seen[p] = true
+			}
+		}
+
+		// Ensure collection exists, then set paths
+		if _, err := db.GetOrCreateCollection(conn, name, "project", nil, merged); err != nil {
+			return err
+		}
+
+		fmt.Printf("Paths for %q:\n", name)
+		for _, p := range merged {
+			fmt.Printf("  %s\n", p)
+		}
+		return nil
+	},
+}
+
+var pathsRemoveCmd = &cobra.Command{
+	Use:   "remove NAME PATH...",
+	Short: "Remove paths from a collection",
+	Args:  cobra.MinimumNArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := args[0]
+		removePaths := args[1:]
+
+		cfg, err := config.Load("")
+		if err != nil {
+			return err
+		}
+		conn, err := db.Open(cfg.ExpandedDBPath())
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+
+		existing, err := db.GetCollectionPaths(conn, name)
+		if err != nil {
+			return err
+		}
+
+		// Resolve paths for comparison
+		removeSet := make(map[string]bool, len(removePaths))
+		for _, p := range removePaths {
+			p = expandHome(p)
+			abs, err := filepath.Abs(p)
+			if err != nil {
+				removeSet[p] = true
+			} else {
+				removeSet[abs] = true
+			}
+		}
+
+		var remaining []string
+		for _, p := range existing {
+			if !removeSet[p] {
+				remaining = append(remaining, p)
+			}
+		}
+
+		if err := db.SetCollectionPaths(conn, name, remaining); err != nil {
+			return err
+		}
+
+		if len(remaining) == 0 {
+			fmt.Printf("No paths remaining for %q.\n", name)
+		} else {
+			fmt.Printf("Paths for %q:\n", name)
+			for _, p := range remaining {
+				fmt.Printf("  %s\n", p)
+			}
+		}
+		return nil
+	},
+}
+
+// expandHome replaces a leading ~ with the user's home directory.
+func expandHome(path string) string {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return filepath.Join(home, path[1:])
+	}
+	return path
+}
+
 func init() {
 	collectionsDeleteCmd.Flags().BoolVarP(&deleteYes, "yes", "y", false, "Skip confirmation")
+
+	pathsCmd.AddCommand(pathsListCmd)
+	pathsCmd.AddCommand(pathsAddCmd)
+	pathsCmd.AddCommand(pathsRemoveCmd)
 
 	collectionsCmd.AddCommand(collectionsListCmd)
 	collectionsCmd.AddCommand(collectionsInfoCmd)
 	collectionsCmd.AddCommand(collectionsDeleteCmd)
 	collectionsCmd.AddCommand(collectionsExportCmd)
+	collectionsCmd.AddCommand(pathsCmd)
 
 	rootCmd.AddCommand(collectionsCmd)
 }

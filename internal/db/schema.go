@@ -145,3 +145,49 @@ func GetOrCreateCollection(db *sql.DB, name, collectionType string, description 
 	slog.Info("created collection", "name", name, "type", collectionType, "id", id)
 	return id, nil
 }
+
+// GetCollectionPaths returns the stored paths for a collection.
+func GetCollectionPaths(db *sql.DB, name string) ([]string, error) {
+	var pathsJSON sql.NullString
+	err := db.QueryRow("SELECT paths FROM collections WHERE name = ?", name).Scan(&pathsJSON)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("collection %q not found", name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query collection paths: %w", err)
+	}
+	if !pathsJSON.Valid || pathsJSON.String == "" {
+		return nil, nil
+	}
+	var paths []string
+	if err := json.Unmarshal([]byte(pathsJSON.String), &paths); err != nil {
+		return nil, fmt.Errorf("unmarshal paths: %w", err)
+	}
+	return paths, nil
+}
+
+// SetCollectionPaths stores paths for an existing collection.
+func SetCollectionPaths(db *sql.DB, name string, paths []string) error {
+	var pathsJSON *string
+	if len(paths) > 0 {
+		b, err := json.Marshal(paths)
+		if err != nil {
+			return fmt.Errorf("marshal paths: %w", err)
+		}
+		s := string(b)
+		pathsJSON = &s
+	}
+
+	result, err := db.Exec("UPDATE collections SET paths = ? WHERE name = ?", pathsJSON, name)
+	if err != nil {
+		return fmt.Errorf("update collection paths: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check rows affected: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("collection %q not found", name)
+	}
+	return nil
+}
