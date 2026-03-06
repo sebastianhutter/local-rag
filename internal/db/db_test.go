@@ -163,3 +163,80 @@ func TestGetOrCreateCollectionWithPaths(t *testing.T) {
 		t.Errorf("paths not updated: %v", pathsJSON.String)
 	}
 }
+
+func TestGetCollectionPaths(t *testing.T) {
+	db := testDB(t)
+	if err := InitSchema(db, 1024); err != nil {
+		t.Fatal(err)
+	}
+
+	// Non-existent collection returns error.
+	_, err := GetCollectionPaths(db, "nonexistent")
+	if err == nil {
+		t.Error("expected error for nonexistent collection")
+	}
+
+	// Collection without paths returns nil.
+	if _, err := GetOrCreateCollection(db, "empty", "project", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := GetCollectionPaths(db, "empty")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if paths != nil {
+		t.Errorf("expected nil paths, got %v", paths)
+	}
+
+	// Collection with paths returns them.
+	if _, err := GetOrCreateCollection(db, "with-paths", "project", nil, []string{"/a", "/b"}); err != nil {
+		t.Fatal(err)
+	}
+	paths, err = GetCollectionPaths(db, "with-paths")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(paths) != 2 || paths[0] != "/a" || paths[1] != "/b" {
+		t.Errorf("got %v, want [/a /b]", paths)
+	}
+}
+
+func TestSetCollectionPaths(t *testing.T) {
+	db := testDB(t)
+	if err := InitSchema(db, 1024); err != nil {
+		t.Fatal(err)
+	}
+
+	// Error on nonexistent collection.
+	err := SetCollectionPaths(db, "nonexistent", []string{"/a"})
+	if err == nil {
+		t.Error("expected error for nonexistent collection")
+	}
+
+	// Set paths on existing collection.
+	if _, err := GetOrCreateCollection(db, "test", "project", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetCollectionPaths(db, "test", []string{"/x", "/y"}); err != nil {
+		t.Fatalf("SetCollectionPaths: %v", err)
+	}
+	paths, err := GetCollectionPaths(db, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 || paths[0] != "/x" || paths[1] != "/y" {
+		t.Errorf("got %v, want [/x /y]", paths)
+	}
+
+	// Clear paths by setting empty slice.
+	if err := SetCollectionPaths(db, "test", nil); err != nil {
+		t.Fatalf("SetCollectionPaths(nil): %v", err)
+	}
+	paths, err = GetCollectionPaths(db, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths != nil {
+		t.Errorf("expected nil paths after clear, got %v", paths)
+	}
+}

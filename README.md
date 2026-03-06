@@ -150,7 +150,7 @@ local-rag index email                            Index eM Client emails
 local-rag index calibre [--library/-l PATH]...   Index Calibre ebook libraries
 local-rag index rss                              Index NetNewsWire RSS articles
 local-rag index group [NAME] [--history]         Index code group(s); omit NAME for all
-local-rag index project NAME [PATH...]           Index documents into a named project
+local-rag index project NAME [PATH...]           Index documents into a named project (paths saved for reuse)
 local-rag index all                              Index all configured sources
 ```
 
@@ -174,10 +174,20 @@ Flags:
 ### Collections
 
 ```
-local-rag collections list              List all collections with counts
-local-rag collections info NAME         Show collection details
-local-rag collections delete NAME [-y]  Delete a collection and all its data
-local-rag collections export NAME       Export collection metadata as JSON
+local-rag collections list                       List all collections with counts
+local-rag collections info NAME                  Show collection details
+local-rag collections delete NAME [-y]           Delete a collection and all its data
+local-rag collections export NAME                Export collection metadata as JSON
+local-rag collections paths list NAME            List stored paths for a collection
+local-rag collections paths add NAME PATH...     Add paths to a collection
+local-rag collections paths remove NAME PATH...  Remove paths from a collection
+```
+
+Project collections store their paths in the database. Use `collections paths add` to configure paths once, then run `index project NAME` without re-specifying them:
+
+```bash
+local-rag collections paths add "Project Alpha" ~/docs/specs ~/docs/designs
+local-rag index project "Project Alpha"    # uses stored paths
 ```
 
 ### Other

@@ -420,13 +420,8 @@ func truncateStr(s string, maxLen int) string {
 }
 
 func loadCollectionPaths(conn *sql.DB, name string) []string {
-	var pathsJSON string
-	err := conn.QueryRow("SELECT paths FROM collections WHERE name = ?", name).Scan(&pathsJSON)
-	if err != nil || pathsJSON == "" {
-		return nil
-	}
-	var paths []string
-	if err := parseJSON(pathsJSON, &paths); err != nil {
+	paths, err := db.GetCollectionPaths(conn, name)
+	if err != nil {
 		return nil
 	}
 	return paths
