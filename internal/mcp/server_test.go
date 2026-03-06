@@ -63,6 +63,18 @@ func TestBuildSourceURI(t *testing.T) {
 		t.Errorf("expected %q, got %v", expected, uri)
 	}
 
+	// Markdown with URL metadata → Atlassian URL
+	uri = buildSourceURI("/path/to/jira-issue.md", "markdown", "atlassian", map[string]any{"url": "https://copebit.atlassian.net/browse/CB-123"}, cfg)
+	if uri != "https://copebit.atlassian.net/browse/CB-123" {
+		t.Errorf("expected Atlassian URL for markdown with url metadata, got %v", uri)
+	}
+
+	// Markdown without URL metadata → file:// URI
+	uri = buildSourceURI("/path/to/note.md", "markdown", "obsidian", map[string]any{}, cfg)
+	if uri != "file:///path/to/note.md" {
+		t.Errorf("expected file:// URI for markdown without url metadata, got %v", uri)
+	}
+
 	// Calibre virtual path → nil
 	uri = buildSourceURI("calibre:///lib/book", "calibre-description", "calibre", nil, cfg)
 	if uri != nil {

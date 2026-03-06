@@ -329,6 +329,13 @@ func buildSourceURI(sourcePath, sourceType, collection string, metadata map[stri
 		return nil
 	}
 
+	// Markdown docs with a URL in metadata (e.g. Jira/Confluence) → use that URL directly.
+	if sourceType == "markdown" {
+		if u, ok := metadata["url"].(string); ok && u != "" {
+			return u
+		}
+	}
+
 	if sourceType == "email" || sourceType == "commit" {
 		return nil
 	}
