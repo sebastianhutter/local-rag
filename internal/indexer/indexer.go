@@ -139,6 +139,13 @@ func parseAndChunk(path, sourceType string, cfg *config.Config) []chunker.Chunk 
 		doc := parser.ParseMarkdown(string(data), filepath.Base(path))
 		chunks := chunker.ChunkMarkdown(doc.BodyText, doc.Title, chunkSize, overlap)
 		for i := range chunks {
+			// Copy frontmatter fields into chunk metadata.
+			for k, v := range doc.Frontmatter {
+				if k == "tags" {
+					continue // handled separately below
+				}
+				chunks[i].Metadata[k] = v
+			}
 			if len(doc.Tags) > 0 {
 				chunks[i].Metadata["tags"] = doc.Tags
 			}
