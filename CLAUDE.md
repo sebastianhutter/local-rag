@@ -249,10 +249,13 @@ local-rag search "query" --after 2025-01-01       # Filter by date
 local-rag search "query" --top 20                 # Number of results
 
 # Collection management
-local-rag collections list              # List all collections with counts
-local-rag collections info NAME         # Show collection details
-local-rag collections delete NAME [-y]  # Delete a collection and all its data
-local-rag collections export NAME       # Export collection metadata as JSON
+local-rag collections list                       # List all collections with counts
+local-rag collections info NAME                  # Show collection details
+local-rag collections delete NAME [-y]           # Delete a collection and all its data
+local-rag collections export NAME                # Export collection metadata as JSON
+local-rag collections paths list NAME            # List stored paths for a collection
+local-rag collections paths add NAME PATH...     # Add paths to a collection
+local-rag collections paths remove NAME PATH...  # Remove paths from a collection
 
 # Status and GUI
 local-rag status                        # Overall stats: collections, doc counts, DB size, Ollama status
