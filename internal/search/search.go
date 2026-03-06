@@ -27,12 +27,13 @@ type SearchResult struct {
 
 // Filters holds optional filters for search queries.
 type Filters struct {
-	Collection string
-	SourceType string
-	DateFrom   string
-	DateTo     string
-	Sender     string
-	Author     string
+	Collection      string
+	SourceType      string
+	DateFrom        string
+	DateTo          string
+	Sender          string
+	Author          string
+	MetadataFilters map[string]string
 }
 
 func (f *Filters) hasFilters() bool {
@@ -40,7 +41,8 @@ func (f *Filters) hasFilters() bool {
 		return false
 	}
 	return f.Collection != "" || f.SourceType != "" || f.Sender != "" ||
-		f.Author != "" || f.DateFrom != "" || f.DateTo != ""
+		f.Author != "" || f.DateFrom != "" || f.DateTo != "" ||
+		len(f.MetadataFilters) > 0
 }
 
 type rankedResult struct {
@@ -187,7 +189,10 @@ func passesFilters(db *sql.DB, documentID int64, filters *Filters) bool {
 		return false
 	}
 
-	if filters.Sender != "" || filters.Author != "" || filters.DateFrom != "" || filters.DateTo != "" {
+	needsMetadata := filters.Sender != "" || filters.Author != "" ||
+		filters.DateFrom != "" || filters.DateTo != "" || len(filters.MetadataFilters) > 0
+
+	if needsMetadata {
 		var metadata map[string]any
 		if metadataStr.Valid {
 			_ = json.Unmarshal([]byte(metadataStr.String), &metadata)
@@ -224,6 +229,35 @@ func passesFilters(db *sql.DB, documentID int64, filters *Filters) bool {
 		}
 		if filters.DateTo != "" && docDate != "" && docDate > filters.DateTo {
 			return false
+		}
+
+		for key, filterVal := range filters.MetadataFilters {
+			raw, exists := metadata[key]
+			if !exists {
+				return false
+			}
+			filterLower := strings.ToLower(filterVal)
+			switch v := raw.(type) {
+			case string:
+				if !strings.Contains(strings.ToLower(v), filterLower) {
+					return false
+				}
+			case []any:
+				found := false
+				for _, elem := range v {
+					if s, ok := elem.(string); ok && strings.Contains(strings.ToLower(s), filterLower) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return false
+				}
+			default:
+				if fmt.Sprintf("%v", v) != filterVal {
+					return false
+				}
+			}
 		}
 	}
 

@@ -93,7 +93,9 @@ Launch `local-rag` with no arguments (or `local-rag gui`) to start the menu bar 
 
 ## MCP Integration
 
-local-rag exposes 4 MCP tools: `rag_search`, `rag_list_collections`, `rag_collection_info`, and `rag_index`.
+local-rag exposes 5 MCP tools: `rag_search`, `rag_list_collections`, `rag_collection_info`, `rag_index`, and `rag_prune`.
+
+The `rag_search` tool supports a `metadata_filter` parameter — a JSON object of key-value pairs for filtering by arbitrary metadata fields (e.g. `{"source": "jira", "issue_key": "CB-123"}`).
 
 ### GUI Mode (SSE)
 
@@ -168,6 +170,7 @@ Flags:
       --author STRING       Filter by book author
       --after YYYY-MM-DD    Only results after this date
       --before YYYY-MM-DD   Only results before this date
+  -m, --meta KEY=VALUE      Filter by metadata field (repeatable)
       --top INT             Number of results (default: 10)
 ```
 
