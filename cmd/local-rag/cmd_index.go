@@ -185,13 +185,13 @@ var indexProjectCmd = &cobra.Command{
 	},
 }
 
-// --- index group ---
+// --- index code ---
 
 var indexHistory bool
 
-var indexGroupCmd = &cobra.Command{
-	Use:   "group [NAME]",
-	Short: "Index code groups (tree-sitter + optional commit history)",
+var indexCodeCmd = &cobra.Command{
+	Use:   "code [NAME]",
+	Short: "Index code repositories (tree-sitter + optional commit history)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, conn, err := openConfigAndDB()
 		if err != nil {
@@ -199,35 +199,35 @@ var indexGroupCmd = &cobra.Command{
 		}
 		defer conn.Close()
 
-		if len(cfg.CodeGroups) == 0 {
-			return fmt.Errorf("no code_groups configured in config")
+		if len(cfg.Repositories) == 0 {
+			return fmt.Errorf("no repositories configured in config")
 		}
 
-		var groupNames []string
+		var repoNames []string
 		if len(args) > 0 {
 			name := args[0]
-			if _, ok := cfg.CodeGroups[name]; !ok {
-				return fmt.Errorf("code group %q not found in config", name)
+			if _, ok := cfg.Repositories[name]; !ok {
+				return fmt.Errorf("repository collection %q not found in config", name)
 			}
-			groupNames = []string{name}
+			repoNames = []string{name}
 		} else {
-			for name := range cfg.CodeGroups {
-				groupNames = append(groupNames, name)
+			for name := range cfg.Repositories {
+				repoNames = append(repoNames, name)
 			}
 		}
 
-		for _, groupName := range groupNames {
-			if !cfg.IsCollectionEnabled(groupName) {
-				slog.Warn("collection is disabled, skipping", "name", groupName)
+		for _, repoName := range repoNames {
+			if !cfg.IsCollectionEnabled(repoName) {
+				slog.Warn("collection is disabled, skipping", "name", repoName)
 				continue
 			}
 
-			autoPrune(conn, cfg, groupName)
-			repos := cfg.CodeGroups[groupName]
+			autoPrune(conn, cfg, repoName)
+			repos := cfg.Repositories[repoName]
 			for _, repoPath := range repos {
-				fmt.Printf("%s: %s\n", groupName, repoPath)
-				result := indexer.IndexGitRepo(conn, cfg, repoPath, groupName, forceIndex, indexHistory, progressCallback(groupName))
-				printResult(fmt.Sprintf("%s/%s", groupName, filepath.Base(repoPath)), result)
+				fmt.Printf("%s: %s\n", repoName, repoPath)
+				result := indexer.IndexGitRepo(conn, cfg, repoPath, repoName, forceIndex, indexHistory, progressCallback(repoName))
+				printResult(fmt.Sprintf("%s/%s", repoName, filepath.Base(repoPath)), result)
 			}
 		}
 		return nil
@@ -249,9 +249,9 @@ var indexAllCmd = &cobra.Command{
 		// Auto-prune obsidian, code, and project collections before indexing
 		if !noPrune {
 			autoPrune(conn, cfg, "obsidian")
-			for groupName := range cfg.CodeGroups {
-				if cfg.IsCollectionEnabled(groupName) {
-					autoPrune(conn, cfg, groupName)
+			for repoName := range cfg.Repositories {
+				if cfg.IsCollectionEnabled(repoName) {
+					autoPrune(conn, cfg, repoName)
 				}
 			}
 			for projectName := range cfg.Projects {
@@ -304,17 +304,17 @@ var indexAllCmd = &cobra.Command{
 			})
 		}
 
-		for groupName, repos := range cfg.CodeGroups {
-			if !cfg.IsCollectionEnabled(groupName) {
+		for repoName, repos := range cfg.Repositories {
+			if !cfg.IsCollectionEnabled(repoName) {
 				continue
 			}
 			for _, repoPath := range repos {
-				gn, rp := groupName, repoPath
-				label := fmt.Sprintf("%s/%s", gn, filepath.Base(rp))
+				rn, rp := repoName, repoPath
+				label := fmt.Sprintf("%s/%s", rn, filepath.Base(rp))
 				sources = append(sources, indexSource{
 					label: label,
 					run: func() *indexer.IndexResult {
-						return indexer.IndexGitRepo(conn, cfg, rp, gn, forceIndex, true, progressCallback(gn))
+						return indexer.IndexGitRepo(conn, cfg, rp, rn, forceIndex, true, progressCallback(rn))
 					},
 				})
 			}
@@ -335,7 +335,7 @@ var indexAllCmd = &cobra.Command{
 		}
 
 		if len(sources) == 0 {
-			return fmt.Errorf("no sources configured — add vaults, libraries, or code groups in config")
+			return fmt.Errorf("no sources configured — add vaults, libraries, or repositories in config")
 		}
 
 		fmt.Println()
@@ -363,14 +363,14 @@ func init() {
 
 	indexObsidianCmd.Flags().StringArrayVarP(&obsidianVaults, "vault", "V", nil, "Vault path(s)")
 	indexCalibreCmd.Flags().StringArrayVarP(&calibreLibraries, "library", "l", nil, "Library path(s)")
-	indexGroupCmd.Flags().BoolVar(&indexHistory, "history", false, "Also index commit history")
+	indexCodeCmd.Flags().BoolVar(&indexHistory, "history", false, "Also index commit history")
 
 	indexCmd.AddCommand(indexObsidianCmd)
 	indexCmd.AddCommand(indexEmailCmd)
 	indexCmd.AddCommand(indexCalibreCmd)
 	indexCmd.AddCommand(indexRSSCmd)
 	indexCmd.AddCommand(indexProjectCmd)
-	indexCmd.AddCommand(indexGroupCmd)
+	indexCmd.AddCommand(indexCodeCmd)
 	indexCmd.AddCommand(indexAllCmd)
 
 	rootCmd.AddCommand(indexCmd)

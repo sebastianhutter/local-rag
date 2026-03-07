@@ -175,8 +175,8 @@ func handleRagIndex(ctx context.Context, request mcp.CallToolRequest) (*mcp.Call
 	case "rss":
 		result = indexer.IndexRSS(conn, cfg, false, nil)
 	default:
-		// Check if it's a code group
-		if repos, ok := cfg.CodeGroups[collection]; ok {
+		// Check if it's a code repository collection
+		if repos, ok := cfg.Repositories[collection]; ok {
 			result = &indexer.IndexResult{}
 			for _, repoPath := range repos {
 				r := indexer.IndexGitRepo(conn, cfg, repoPath, collection, false, false, nil)
@@ -186,7 +186,7 @@ func handleRagIndex(ctx context.Context, request mcp.CallToolRequest) (*mcp.Call
 			result = indexer.IndexProject(conn, cfg, collection, paths, false, nil)
 		} else {
 			return mcp.NewToolResultError(fmt.Sprintf(
-				"unknown collection %q — configure it in config.json under code_groups or projects", collection)), nil
+				"unknown collection %q — configure it in config.json under repositories or projects", collection)), nil
 		}
 	}
 

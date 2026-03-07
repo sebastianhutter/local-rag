@@ -195,11 +195,11 @@ func (a *App) doRebuildMenu() {
 		})
 	}
 
-	// Dynamic code groups from config.
-	if len(cfg.CodeGroups) > 0 {
+	// Dynamic repository collections from config.
+	if len(cfg.Repositories) > 0 {
 		indexItems = append(indexItems, fyne.NewMenuItemSeparator())
-		for groupName := range cfg.CodeGroups {
-			gn := groupName
+		for repoName := range cfg.Repositories {
+			gn := repoName
 			indexItems = append(indexItems, &fyne.MenuItem{
 				Label:  gn,
 				Action: func() { a.triggerIndex(gn) },

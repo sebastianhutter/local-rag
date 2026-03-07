@@ -54,7 +54,7 @@ type Config struct {
 	EmclientDBPath            string              `json:"emclient_db_path"`
 	CalibreLibraries          []string            `json:"calibre_libraries"`
 	NetnewswireDBPath         string              `json:"netnewswire_db_path"`
-	CodeGroups                map[string][]string  `json:"code_groups"`
+	Repositories              map[string][]string  `json:"repositories"`
 	Projects                  map[string][]string  `json:"projects"`
 	DisabledCollections       []string            `json:"disabled_collections"`
 	GitHistoryInMonths        int                 `json:"git_history_in_months"`
@@ -130,12 +130,12 @@ func Load(path string) (*Config, error) {
 	for i, v := range cfg.CalibreLibraries {
 		cfg.CalibreLibraries[i] = expandPath(v)
 	}
-	for name, paths := range cfg.CodeGroups {
+	for name, paths := range cfg.Repositories {
 		expanded := make([]string, len(paths))
 		for i, p := range paths {
 			expanded[i] = expandPath(p)
 		}
-		cfg.CodeGroups[name] = expanded
+		cfg.Repositories[name] = expanded
 	}
 	for name, paths := range cfg.Projects {
 		expanded := make([]string, len(paths))
@@ -195,7 +195,7 @@ func Save(cfg *Config, path string) error {
 	existing["emclient_db_path"] = cfg.EmclientDBPath
 	existing["calibre_libraries"] = cfg.CalibreLibraries
 	existing["netnewswire_db_path"] = cfg.NetnewswireDBPath
-	existing["code_groups"] = cfg.CodeGroups
+	existing["repositories"] = cfg.Repositories
 	existing["projects"] = cfg.Projects
 	existing["disabled_collections"] = cfg.DisabledCollections
 	existing["git_history_in_months"] = cfg.GitHistoryInMonths
@@ -238,7 +238,7 @@ func defaults() *Config {
 		NetnewswireDBPath: filepath.Join(home, "Library", "Containers",
 			"com.ranchero.NetNewsWire-Evergreen", "Data", "Library",
 			"Application Support", "NetNewsWire", "Accounts"),
-		CodeGroups:                make(map[string][]string),
+		Repositories:              make(map[string][]string),
 		Projects:                  make(map[string][]string),
 		DisabledCollections:       []string{},
 		GitHistoryInMonths:        6,

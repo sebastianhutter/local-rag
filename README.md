@@ -10,7 +10,7 @@ A fully local, privacy-preserving RAG (Retrieval Augmented Generation) system fo
 | **eM Client**    | system          | Emails — subject, body, sender, recipients, date, folder                         |
 | **Calibre**      | system          | Ebook metadata + content — EPUB/PDF with author, tags, series                    |
 | **NetNewsWire**  | system          | RSS articles — title, author, content, feed name                                 |
-| **Code Groups**  | code            | Git repos grouped by org/topic — tree-sitter structural parsing + commit history |
+| **Code Repos**   | code            | Git repos grouped by org/topic — tree-sitter structural parsing + commit history |
 | **Project Docs** | project         | Any folder of documents dispatched to the correct parser by extension            |
 
 ## Installation
@@ -53,7 +53,7 @@ Requires Go 1.24+, CGO enabled (for SQLite), and macOS (for `sips`/`iconutil`/`h
 {
   "obsidian_vaults": ["~/Documents/MyVault"],
   "calibre_libraries": ["~/CalibreLibrary"],
-  "code_groups": {
+  "repositories": {
     "my-org": ["~/Repository/my-org/repo1", "~/Repository/my-org/repo2"]
   },
   "projects": {
@@ -69,7 +69,7 @@ local-rag index obsidian
 local-rag index email
 local-rag index calibre
 local-rag index rss
-local-rag index group my-org --history
+local-rag index code my-org --history
 local-rag index all                        # everything at once
 ```
 
@@ -154,7 +154,7 @@ local-rag index obsidian [--vault/-V PATH]...   Index Obsidian vaults
 local-rag index email                            Index eM Client emails
 local-rag index calibre [--library/-l PATH]...   Index Calibre ebook libraries
 local-rag index rss                              Index NetNewsWire RSS articles
-local-rag index group [NAME] [--history]         Index code group(s); omit NAME for all
+local-rag index code [NAME] [--history]          Index code repositories; omit NAME for all
 local-rag index project [NAME]                   Index project(s) from config; omit NAME for all
 local-rag index all                              Index all configured sources
 ```
@@ -191,7 +191,7 @@ local-rag collections paths update NAME \        Rewrite path prefixes in-place
   --old-prefix OLD --new-prefix NEW              (config paths + source paths in DB)
 ```
 
-All collection paths are stored in `config.json`. The `paths` commands work for all collection types — obsidian vaults, calibre libraries, code groups, and projects.
+All collection paths are stored in `config.json`. The `paths` commands work for all collection types — obsidian vaults, calibre libraries, repositories, and projects.
 
 If you move files to a new location, use `paths update` to rewrite all paths without re-indexing:
 
@@ -226,7 +226,7 @@ Config file: `~/.local-rag/config.json`
 | `emclient_db_path`                  | `~/Library/Application Support/eM Client` | eM Client database path                  |
 | `calibre_libraries`                 | `[]`                                      | Paths to Calibre libraries               |
 | `netnewswire_db_path`               | *(auto-detected)*                         | NetNewsWire database path                |
-| `code_groups`                       | `{}`                                      | Map of group name to repo paths          |
+| `repositories`                      | `{}`                                      | Map of collection name to repo paths     |
 | `projects`                          | `{}`                                      | Map of project name to document paths    |
 | `disabled_collections`              | `[]`                                      | Collection names to skip during indexing |
 | `git_history_in_months`             | `6`                                       | How far back to index commit history     |

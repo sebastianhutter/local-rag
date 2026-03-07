@@ -470,7 +470,7 @@ func getConfigPaths(cfg *config.Config, name string) []string {
 	case "calibre":
 		return cfg.CalibreLibraries
 	default:
-		if paths, ok := cfg.CodeGroups[name]; ok {
+		if paths, ok := cfg.Repositories[name]; ok {
 			return paths
 		}
 		if paths, ok := cfg.Projects[name]; ok {
@@ -488,8 +488,8 @@ func setConfigPaths(cfg *config.Config, name string, paths []string) error {
 	case "calibre":
 		cfg.CalibreLibraries = paths
 	default:
-		if _, ok := cfg.CodeGroups[name]; ok {
-			cfg.CodeGroups[name] = paths
+		if _, ok := cfg.Repositories[name]; ok {
+			cfg.Repositories[name] = paths
 			return nil
 		}
 		// Default to projects

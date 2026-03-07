@@ -203,8 +203,8 @@ local-rag index obsidian [--vault PATH]    Index Obsidian vault(s)
 local-rag index email                      Index eM Client emails
 local-rag index calibre [--library PATH]   Index Calibre ebook libraries
 local-rag index rss                        Index NetNewsWire RSS articles
-local-rag index group [NAME] [--history]   Index code group(s), optionally with commit history
-local-rag index project NAME PATH...       Index docs into a project collection
+local-rag index code [NAME] [--history]    Index code repositories, optionally with commit history
+local-rag index project [NAME]             Index project(s) from config
 local-rag index all                        Index all configured sources (includes commit history)
 local-rag search QUERY [--collection]      Hybrid search with filters
 local-rag collections list                 List all collections
@@ -231,7 +231,7 @@ Key settings:
 - `emclient_db_path` — path to eM Client data directory
 - `calibre_libraries` — list of Calibre library paths
 - `netnewswire_db_path` — path to NetNewsWire accounts directory
-- `code_groups` — dict mapping group names to lists of git repo paths
+- `repositories` — dict mapping collection names to lists of git repo paths
 - `git_history_in_months` — months of commit history to index (default: `6`)
 - `disabled_collections` — list of collection names to skip during indexing (any collection name)
 - `search_defaults` — RRF parameters (`top_k`, `rrf_k`, `vector_weight`, `fts_weight`)

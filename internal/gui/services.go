@@ -184,7 +184,7 @@ func (s *IndexingService) IndexAll(cfg *config.Config, onComplete func(error)) {
 	// Auto-prune obsidian and code collections before indexing
 	s.setLabel("pruning")
 	indexer.PruneCollection(conn, cfg, "obsidian")
-	for groupName := range cfg.CodeGroups {
+	for groupName := range cfg.Repositories {
 		if cfg.IsCollectionEnabled(groupName) {
 			indexer.PruneCollection(conn, cfg, groupName)
 		}
@@ -224,8 +224,8 @@ func (s *IndexingService) IndexAll(cfg *config.Config, onComplete func(error)) {
 		c.run()
 	}
 
-	// Code groups.
-	for groupName, repos := range cfg.CodeGroups {
+	// Code repositories.
+	for groupName, repos := range cfg.Repositories {
 		if !cfg.IsCollectionEnabled(groupName) {
 			continue
 		}
@@ -270,7 +270,7 @@ func (s *IndexingService) IndexCollection(name string, cfg *config.Config, onCom
 	// Auto-prune for obsidian, code, and project collections
 	if name == "obsidian" {
 		indexer.PruneCollection(conn, cfg, name)
-	} else if _, isCode := cfg.CodeGroups[name]; isCode {
+	} else if _, isCode := cfg.Repositories[name]; isCode {
 		indexer.PruneCollection(conn, cfg, name)
 	} else if _, isProject := cfg.Projects[name]; isProject {
 		indexer.PruneCollection(conn, cfg, name)
@@ -286,8 +286,8 @@ func (s *IndexingService) IndexCollection(name string, cfg *config.Config, onCom
 	case "rss":
 		indexer.IndexRSS(conn, cfg, false, nil)
 	default:
-		// Check if it's a code group.
-		if repos, ok := cfg.CodeGroups[name]; ok {
+		// Check if it's a repository collection.
+		if repos, ok := cfg.Repositories[name]; ok {
 			for _, repoPath := range repos {
 				indexer.IndexGitRepo(conn, cfg, repoPath, name, false, true, nil)
 			}

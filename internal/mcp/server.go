@@ -81,19 +81,19 @@ var ragSearchTool = mcp.NewTool("rag_search",
 var ragListCollectionsTool = mcp.NewTool("rag_list_collections",
 	mcp.WithDescription(
 		"List all available collections with source file counts, chunk counts, "+
-			"and metadata. Collections of type 'code' represent code groups that "+
+			"and metadata. Collections of type 'code' represent repository collections that "+
 			"may contain multiple git repos."),
 )
 
 var ragIndexTool = mcp.NewTool("rag_index",
 	mcp.WithDescription(
 		"Trigger indexing for a collection. For system collections ('obsidian', "+
-			"'email', 'calibre', 'rss'), uses configured paths. For code groups, "+
-			"indexes all repos in that group. For project collections, a path "+
-			"argument is required."),
+			"'email', 'calibre', 'rss'), uses configured paths. For repository collections, "+
+			"indexes all repos in that collection. For project collections, uses "+
+			"configured paths."),
 	mcp.WithString("collection",
 		mcp.Required(),
-		mcp.Description("Collection name ('obsidian', 'email', 'calibre', 'rss', code group name, or project name)")),
+		mcp.Description("Collection name ('obsidian', 'email', 'calibre', 'rss', repository collection name, or project name)")),
 	mcp.WithString("path",
 		mcp.Description("Path to index (required for project collections)")),
 )

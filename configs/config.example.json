@@ -16,7 +16,7 @@
         "~/CalibreLibrary"
     ],
     "netnewswire_db_path": "~/Library/Containers/com.ranchero.NetNewsWire-Evergreen/Data/Library/Application Support/NetNewsWire/Accounts",
-    "code_groups": {
+    "repositories": {
         "my-org": [
             "~/Repository/my-org/repo1",
             "~/Repository/my-org/repo2"
