@@ -446,7 +446,7 @@ func deleteSource(conn *sql.DB, collectionID int64, sourcePath string) {
 
 // IndexProject indexes documents from file paths into a named project collection.
 func IndexProject(conn *sql.DB, cfg *config.Config, collectionName string, paths []string, force bool, progress ProgressCallback) *IndexResult {
-	collectionID, err := db.GetOrCreateCollection(conn, collectionName, "project", nil, paths)
+	collectionID, err := db.GetOrCreateCollection(conn, collectionName, "project", nil, nil)
 	if err != nil {
 		slog.Error("failed to get/create collection", "name", collectionName, "err", err)
 		return &IndexResult{Errors: 1, ErrorMessages: []string{err.Error()}}

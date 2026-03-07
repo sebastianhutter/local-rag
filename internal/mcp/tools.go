@@ -182,26 +182,11 @@ func handleRagIndex(ctx context.Context, request mcp.CallToolRequest) (*mcp.Call
 				r := indexer.IndexGitRepo(conn, cfg, repoPath, collection, false, false, nil)
 				result.Merge(r)
 			}
+		} else if paths, ok := cfg.Projects[collection]; ok {
+			result = indexer.IndexProject(conn, cfg, collection, paths, false, nil)
 		} else {
-			// Assume it's a project collection
-			path := request.GetString("path", "")
-			if path == "" {
-				// Try to load paths from DB
-				var pathsJSON sql.NullString
-				conn.QueryRow("SELECT paths FROM collections WHERE name = ?", collection).Scan(&pathsJSON)
-				if pathsJSON.Valid && pathsJSON.String != "" {
-					var paths []string
-					if json.Unmarshal([]byte(pathsJSON.String), &paths) == nil && len(paths) > 0 {
-						result = indexer.IndexProject(conn, cfg, collection, paths, false, nil)
-					}
-				}
-				if result == nil {
-					return mcp.NewToolResultError(fmt.Sprintf(
-						"unknown collection %q — provide a 'path' argument for project collections", collection)), nil
-				}
-			} else {
-				result = indexer.IndexProject(conn, cfg, collection, []string{path}, false, nil)
-			}
+			return mcp.NewToolResultError(fmt.Sprintf(
+				"unknown collection %q — configure it in config.json under code_groups or projects", collection)), nil
 		}
 	}
 

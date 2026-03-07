@@ -3,7 +3,6 @@ package gui
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -236,20 +235,13 @@ func (s *IndexingService) IndexAll(cfg *config.Config, onComplete func(error)) {
 		}
 	}
 
-	// Project collections from DB.
-	rows, err := conn.Query("SELECT name, paths FROM collections WHERE collection_type = 'project' AND paths IS NOT NULL")
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var name, pathsJSON string
-			if rows.Scan(&name, &pathsJSON) == nil && pathsJSON != "" && cfg.IsCollectionEnabled(name) {
-				var paths []string
-				if parseJSONPaths(pathsJSON, &paths) == nil && len(paths) > 0 {
-					s.setLabel(name)
-					indexer.IndexProject(conn, cfg, name, paths, false, nil)
-				}
-			}
+	// Project collections from config.
+	for projectName, paths := range cfg.Projects {
+		if !cfg.IsCollectionEnabled(projectName) {
+			continue
 		}
+		s.setLabel(projectName)
+		indexer.IndexProject(conn, cfg, projectName, paths, false, nil)
 	}
 }
 
@@ -275,10 +267,12 @@ func (s *IndexingService) IndexCollection(name string, cfg *config.Config, onCom
 	}
 	defer conn.Close()
 
-	// Auto-prune for obsidian and code collections only
+	// Auto-prune for obsidian, code, and project collections
 	if name == "obsidian" {
 		indexer.PruneCollection(conn, cfg, name)
 	} else if _, isCode := cfg.CodeGroups[name]; isCode {
+		indexer.PruneCollection(conn, cfg, name)
+	} else if _, isProject := cfg.Projects[name]; isProject {
 		indexer.PruneCollection(conn, cfg, name)
 	}
 
@@ -299,14 +293,10 @@ func (s *IndexingService) IndexCollection(name string, cfg *config.Config, onCom
 			}
 			return
 		}
-		// Try as project collection.
-		var pathsJSON string
-		err := conn.QueryRow("SELECT paths FROM collections WHERE name = ? AND collection_type = 'project'", name).Scan(&pathsJSON)
-		if err == nil && pathsJSON != "" {
-			var paths []string
-			if parseJSONPaths(pathsJSON, &paths) == nil && len(paths) > 0 {
-				indexer.IndexProject(conn, cfg, name, paths, false, nil)
-			}
+		// Check if it's a project.
+		if paths, ok := cfg.Projects[name]; ok {
+			indexer.IndexProject(conn, cfg, name, paths, false, nil)
+			return
 		}
 	}
 }
@@ -425,8 +415,4 @@ func openDB(cfg *config.Config) (*sql.DB, error) {
 		return nil, err
 	}
 	return conn, nil
-}
-
-func parseJSONPaths(data string, out *[]string) error {
-	return json.Unmarshal([]byte(data), out)
 }

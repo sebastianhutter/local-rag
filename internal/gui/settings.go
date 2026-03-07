@@ -58,10 +58,11 @@ func (a *App) openSettings() {
 	// Work on a copy of the config so cancel discards changes.
 	cfg := *a.cfg
 
-	// Build all 7 tabs.
+	// Build all 8 tabs.
 	generalTab := a.buildGeneralTab(&cfg, w)
 	sourcesTab := a.buildSourcesTab(&cfg, w)
 	codeGroupsTab := a.buildCodeGroupsTab(&cfg, w)
+	projectsTab := a.buildProjectsTab(&cfg, w)
 	searchTab := a.buildSearchTab(&cfg)
 	ocrTab := a.buildOCRTab(&cfg)
 	mcpTab := a.buildMCPTab(&cfg, w)
@@ -71,6 +72,7 @@ func (a *App) openSettings() {
 		container.NewTabItem("General", generalTab),
 		container.NewTabItem("Sources", sourcesTab),
 		container.NewTabItem("Code Groups", codeGroupsTab),
+		container.NewTabItem("Projects", projectsTab),
 		container.NewTabItem("Search", searchTab),
 		container.NewTabItem("OCR", ocrTab),
 		container.NewTabItem("MCP & Scheduling", mcpTab),
@@ -328,7 +330,99 @@ func (a *App) buildCodeGroupsTab(cfg *config.Config, w fyne.Window) fyne.CanvasO
 }
 
 // ---------------------------------------------------------------------------
-// Tab 4 — Search
+// Tab 4 — Projects
+// ---------------------------------------------------------------------------
+
+func (a *App) buildProjectsTab(cfg *config.Config, w fyne.Window) fyne.CanvasObject {
+	if cfg.Projects == nil {
+		cfg.Projects = make(map[string][]string)
+	}
+
+	projectsBox := container.NewVBox()
+
+	var rebuild func()
+	rebuild = func() {
+		projectsBox.RemoveAll()
+		if len(cfg.Projects) == 0 {
+			projectsBox.Add(widget.NewLabel("No projects configured."))
+			return
+		}
+		for projectName, paths := range cfg.Projects {
+			pn := projectName
+			header := widget.NewLabel(pn)
+			header.TextStyle.Bold = true
+
+			removeBtn := widget.NewButton("Remove Project", func() {
+				dialog.ShowConfirm("Remove Project",
+					fmt.Sprintf("Remove project '%s' and all its paths?", pn),
+					func(yes bool) {
+						if yes {
+							delete(cfg.Projects, pn)
+							rebuild()
+						}
+					}, w)
+			})
+
+			projectsBox.Add(container.NewHBox(header, removeBtn))
+			for _, p := range paths {
+				pathLabel := widget.NewLabel("    " + p)
+				pathLabel.Wrapping = fyne.TextTruncate
+				projectsBox.Add(pathLabel)
+			}
+			projectsBox.Add(widget.NewSeparator())
+		}
+	}
+	rebuild()
+
+	addProjectBtn := widget.NewButton("Add Project", func() {
+		entry := widget.NewEntry()
+		entry.SetPlaceHolder("Project name")
+		dialog.ShowForm("Add Project", "Add", "Cancel",
+			[]*widget.FormItem{widget.NewFormItem("Name", entry)},
+			func(ok bool) {
+				if ok && entry.Text != "" {
+					cfg.Projects[entry.Text] = []string{}
+					rebuild()
+				}
+			}, w)
+	})
+
+	addPathBtn := widget.NewButton("Add Path", func() {
+		if len(cfg.Projects) == 0 {
+			dialog.ShowInformation("No Projects", "Create a project first.", w)
+			return
+		}
+		var names []string
+		for name := range cfg.Projects {
+			names = append(names, name)
+		}
+		sel := widget.NewSelect(names, nil)
+		sel.SetSelected(names[0])
+		dialog.ShowForm("Select Project", "Next", "Cancel",
+			[]*widget.FormItem{widget.NewFormItem("Project", sel)},
+			func(ok bool) {
+				if !ok || sel.Selected == "" {
+					return
+				}
+				project := sel.Selected
+				dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
+					if uri != nil {
+						cfg.Projects[project] = append(cfg.Projects[project], uri.Path())
+						rebuild()
+					}
+				}, w)
+			}, w)
+	})
+
+	buttons := container.NewHBox(addProjectBtn, addPathBtn)
+
+	return container.NewVScroll(container.NewVBox(
+		widget.NewCard("Projects", "", container.NewVBox(buttons, projectsBox)),
+	))
+}
+
+// ---------------------------------------------------------------------------
+// Tab 5 — Search
 // ---------------------------------------------------------------------------
 
 func (a *App) buildSearchTab(cfg *config.Config) fyne.CanvasObject {
