@@ -184,6 +184,8 @@ local-rag collections export NAME                Export collection metadata as J
 local-rag collections paths list NAME            List stored paths for a collection
 local-rag collections paths add NAME PATH...     Add paths to a collection
 local-rag collections paths remove NAME PATH...  Remove paths from a collection
+local-rag collections paths update NAME \        Rewrite path prefixes in-place
+  --old-prefix OLD --new-prefix NEW              (collection paths + source paths)
 ```
 
 Project collections store their paths in the database. Use `collections paths add` to configure paths once, then run `index project NAME` without re-specifying them:
@@ -191,6 +193,13 @@ Project collections store their paths in the database. Use `collections paths ad
 ```bash
 local-rag collections paths add "Project Alpha" ~/docs/specs ~/docs/designs
 local-rag index project "Project Alpha"    # uses stored paths
+```
+
+If you move files to a new location, use `paths update` to rewrite all paths in the database without re-indexing:
+
+```bash
+local-rag collections paths update "Project Alpha" \
+  --old-prefix ~/docs/specs --new-prefix ~/new-location/specs
 ```
 
 ### Other

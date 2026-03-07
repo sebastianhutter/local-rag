@@ -191,3 +191,27 @@ func SetCollectionPaths(db *sql.DB, name string, paths []string) error {
 	}
 	return nil
 }
+
+// RewriteSourcePaths replaces oldPrefix with newPrefix in source_path for all
+// sources belonging to the named collection. Returns the number of rows updated.
+func RewriteSourcePaths(d *sql.DB, collectionName, oldPrefix, newPrefix string) (int64, error) {
+	var collID int64
+	err := d.QueryRow("SELECT id FROM collections WHERE name = ?", collectionName).Scan(&collID)
+	if err == sql.ErrNoRows {
+		return 0, fmt.Errorf("collection %q not found", collectionName)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("lookup collection: %w", err)
+	}
+
+	result, err := d.Exec(`
+		UPDATE sources
+		SET source_path = ? || SUBSTR(source_path, ? + 1)
+		WHERE collection_id = ?
+		  AND source_path LIKE ? || '%'
+	`, newPrefix, len(oldPrefix), collID, oldPrefix)
+	if err != nil {
+		return 0, fmt.Errorf("rewrite source paths: %w", err)
+	}
+	return result.RowsAffected()
+}
