@@ -55,6 +55,9 @@ Requires Go 1.24+, CGO enabled (for SQLite), and macOS (for `sips`/`iconutil`/`h
   "calibre_libraries": ["~/CalibreLibrary"],
   "code_groups": {
     "my-org": ["~/Repository/my-org/repo1", "~/Repository/my-org/repo2"]
+  },
+  "projects": {
+    "client-docs": ["~/Documents/client-project/specs"]
   }
 }
 ```
@@ -152,7 +155,7 @@ local-rag index email                            Index eM Client emails
 local-rag index calibre [--library/-l PATH]...   Index Calibre ebook libraries
 local-rag index rss                              Index NetNewsWire RSS articles
 local-rag index group [NAME] [--history]         Index code group(s); omit NAME for all
-local-rag index project NAME [PATH...]           Index documents into a named project (paths saved for reuse)
+local-rag index project [NAME]                   Index project(s) from config; omit NAME for all
 local-rag index all                              Index all configured sources
 ```
 
@@ -181,21 +184,16 @@ local-rag collections list                       List all collections with count
 local-rag collections info NAME                  Show collection details
 local-rag collections delete NAME [-y]           Delete a collection and all its data
 local-rag collections export NAME                Export collection metadata as JSON
-local-rag collections paths list NAME            List stored paths for a collection
-local-rag collections paths add NAME PATH...     Add paths to a collection
-local-rag collections paths remove NAME PATH...  Remove paths from a collection
+local-rag collections paths list NAME            List configured paths for a collection
+local-rag collections paths add NAME PATH...     Add paths to a collection in config
+local-rag collections paths remove NAME PATH...  Remove paths from a collection in config
 local-rag collections paths update NAME \        Rewrite path prefixes in-place
-  --old-prefix OLD --new-prefix NEW              (collection paths + source paths)
+  --old-prefix OLD --new-prefix NEW              (config paths + source paths in DB)
 ```
 
-Project collections store their paths in the database. Use `collections paths add` to configure paths once, then run `index project NAME` without re-specifying them:
+All collection paths are stored in `config.json`. The `paths` commands work for all collection types — obsidian vaults, calibre libraries, code groups, and projects.
 
-```bash
-local-rag collections paths add "Project Alpha" ~/docs/specs ~/docs/designs
-local-rag index project "Project Alpha"    # uses stored paths
-```
-
-If you move files to a new location, use `paths update` to rewrite all paths in the database without re-indexing:
+If you move files to a new location, use `paths update` to rewrite all paths without re-indexing:
 
 ```bash
 local-rag collections paths update "Project Alpha" \
@@ -229,6 +227,7 @@ Config file: `~/.local-rag/config.json`
 | `calibre_libraries`                 | `[]`                                      | Paths to Calibre libraries               |
 | `netnewswire_db_path`               | *(auto-detected)*                         | NetNewsWire database path                |
 | `code_groups`                       | `{}`                                      | Map of group name to repo paths          |
+| `projects`                          | `{}`                                      | Map of project name to document paths    |
 | `disabled_collections`              | `[]`                                      | Collection names to skip during indexing |
 | `git_history_in_months`             | `6`                                       | How far back to index commit history     |
 | `git_commit_subject_blacklist`      | `[]`                                      | Commit subjects to skip                  |

@@ -29,7 +29,8 @@ local-rag index rss
 local-rag index group rustyquill
 local-rag index group                    # all groups
 local-rag index group rustyquill --history  # code + commit history
-local-rag index project "Project Alpha" ~/Documents/project-alpha-docs/
+local-rag index project                  # all projects
+local-rag index project "Project Alpha"  # specific project
 
 # Search
 local-rag search "kubernetes deployment strategy"
@@ -98,7 +99,7 @@ flowchart LR
 | **Calibre** | `calibre` | `index calibre` | SQLite metadata.db + book files (read-only) — EPUB/PDF content with author, tags, series metadata |
 | **NetNewsWire** | `rss` | `index rss` | SQLite databases (read-only) — RSS article title, author, content, feed name |
 | **Code Groups** | group name | `index group [NAME]` | Git repos grouped by org/topic — tree-sitter structural parsing + commit history (messages and per-file diffs), respects .gitignore |
-| **Project Docs** | user name | `index project NAME PATH` | Any folder — files dispatched to correct parser by extension |
+| **Project Docs** | user name | `index project [NAME]` | Any folder — files dispatched to correct parser by extension, paths from config |
 
 ---
 
@@ -233,7 +234,7 @@ local-rag index email                             # Index eM Client emails
 local-rag index calibre [--library/-l PATH]...   # Index Calibre ebook libraries
 local-rag index rss                               # Index NetNewsWire RSS articles
 local-rag index group [NAME] [--history]          # Index code group(s), --history for commit history
-local-rag index project NAME [PATH...]            # Index docs into a named project
+local-rag index project [NAME]                    # Index project(s) from config
 local-rag index all                               # Index all configured sources at once
 
 # All index commands support --force to re-index everything
@@ -257,11 +258,11 @@ local-rag collections list                       # List all collections with cou
 local-rag collections info NAME                  # Show collection details
 local-rag collections delete NAME [-y]           # Delete a collection and all its data
 local-rag collections export NAME                # Export collection metadata as JSON
-local-rag collections paths list NAME            # List stored paths for a collection
-local-rag collections paths add NAME PATH...     # Add paths to a collection
-local-rag collections paths remove NAME PATH...  # Remove paths from a collection
+local-rag collections paths list NAME            # List configured paths for a collection
+local-rag collections paths add NAME PATH...     # Add paths to a collection in config
+local-rag collections paths remove NAME PATH...  # Remove paths from a collection in config
 local-rag collections paths update NAME \        # Rewrite path prefixes in-place
-  --old-prefix OLD --new-prefix NEW              # (collection paths + source paths)
+  --old-prefix OLD --new-prefix NEW              # (config paths + source paths in DB)
 
 # Status and GUI
 local-rag status                        # Overall stats: collections, doc counts, DB size, Ollama status
@@ -303,6 +304,10 @@ Config file location: `~/.local-rag/config.json`
   "code_groups": {
     "my-org": ["~/Repository/my-org/repo1", "~/Repository/my-org/repo2"],
     "terraform": ["~/Repository/my-org/tf-infra", "~/Repository/other-org/tf-modules"]
+  },
+  "projects": {
+    "client-docs": ["~/Documents/client-project/specs", "~/Documents/client-project/notes"],
+    "research": ["~/Documents/research-papers"]
   },
   "disabled_collections": [],
   "git_history_in_months": 6,

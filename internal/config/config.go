@@ -55,6 +55,7 @@ type Config struct {
 	CalibreLibraries          []string            `json:"calibre_libraries"`
 	NetnewswireDBPath         string              `json:"netnewswire_db_path"`
 	CodeGroups                map[string][]string  `json:"code_groups"`
+	Projects                  map[string][]string  `json:"projects"`
 	DisabledCollections       []string            `json:"disabled_collections"`
 	GitHistoryInMonths        int                 `json:"git_history_in_months"`
 	GitCommitSubjectBlacklist []string            `json:"git_commit_subject_blacklist"`
@@ -136,6 +137,13 @@ func Load(path string) (*Config, error) {
 		}
 		cfg.CodeGroups[name] = expanded
 	}
+	for name, paths := range cfg.Projects {
+		expanded := make([]string, len(paths))
+		for i, p := range paths {
+			expanded[i] = expandPath(p)
+		}
+		cfg.Projects[name] = expanded
+	}
 
 	// Handle backward compat for auto_reindex.
 	if _, ok := raw["gui"]; ok {
@@ -188,6 +196,7 @@ func Save(cfg *Config, path string) error {
 	existing["calibre_libraries"] = cfg.CalibreLibraries
 	existing["netnewswire_db_path"] = cfg.NetnewswireDBPath
 	existing["code_groups"] = cfg.CodeGroups
+	existing["projects"] = cfg.Projects
 	existing["disabled_collections"] = cfg.DisabledCollections
 	existing["git_history_in_months"] = cfg.GitHistoryInMonths
 	existing["git_commit_subject_blacklist"] = cfg.GitCommitSubjectBlacklist
@@ -230,6 +239,7 @@ func defaults() *Config {
 			"com.ranchero.NetNewsWire-Evergreen", "Data", "Library",
 			"Application Support", "NetNewsWire", "Accounts"),
 		CodeGroups:                make(map[string][]string),
+		Projects:                  make(map[string][]string),
 		DisabledCollections:       []string{},
 		GitHistoryInMonths:        6,
 		GitCommitSubjectBlacklist: []string{},

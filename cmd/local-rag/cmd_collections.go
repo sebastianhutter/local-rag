@@ -112,6 +112,15 @@ var collectionsInfoCmd = &cobra.Command{
 			fmt.Printf("Last indexed: %s\n", lastIndexed.String)
 		}
 
+		// Show configured paths
+		paths := getConfigPaths(cfg, name)
+		if len(paths) > 0 {
+			fmt.Println("\nConfigured paths:")
+			for _, p := range paths {
+				fmt.Printf("  %s\n", p)
+			}
+		}
+
 		// Source type breakdown
 		typeRows, err := conn.Query("SELECT source_type, COUNT(*) FROM sources WHERE collection_id = ? GROUP BY source_type ORDER BY source_type", id)
 		if err == nil {
@@ -258,7 +267,7 @@ var pathsCmd = &cobra.Command{
 
 var pathsListCmd = &cobra.Command{
 	Use:   "list NAME",
-	Short: "List stored paths for a collection",
+	Short: "List configured paths for a collection",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
@@ -266,18 +275,10 @@ var pathsListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		conn, err := db.Open(cfg.ExpandedDBPath())
-		if err != nil {
-			return err
-		}
-		defer conn.Close()
 
-		paths, err := db.GetCollectionPaths(conn, name)
-		if err != nil {
-			return err
-		}
+		paths := getConfigPaths(cfg, name)
 		if len(paths) == 0 {
-			return fmt.Errorf("no paths stored for collection %q", name)
+			return fmt.Errorf("no paths configured for collection %q", name)
 		}
 		for _, p := range paths {
 			fmt.Println(p)
@@ -288,7 +289,7 @@ var pathsListCmd = &cobra.Command{
 
 var pathsAddCmd = &cobra.Command{
 	Use:   "add NAME PATH...",
-	Short: "Add paths to a collection",
+	Short: "Add paths to a collection in config",
 	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
@@ -296,15 +297,6 @@ var pathsAddCmd = &cobra.Command{
 
 		cfg, err := config.Load("")
 		if err != nil {
-			return err
-		}
-		conn, err := db.Open(cfg.ExpandedDBPath())
-		if err != nil {
-			return err
-		}
-		defer conn.Close()
-
-		if err := db.InitSchema(conn, cfg.EmbeddingDimensions); err != nil {
 			return err
 		}
 
@@ -319,25 +311,16 @@ var pathsAddCmd = &cobra.Command{
 			resolved = append(resolved, abs)
 		}
 
-		// Load existing paths (collection may not exist yet)
-		existing, _ := db.GetCollectionPaths(conn, name)
+		// Determine which config section this belongs to
+		existing := getConfigPaths(cfg, name)
+		merged := mergeUnique(existing, resolved)
 
-		// Merge and deduplicate
-		seen := make(map[string]bool, len(existing))
-		for _, p := range existing {
-			seen[p] = true
-		}
-		merged := append([]string{}, existing...)
-		for _, p := range resolved {
-			if !seen[p] {
-				merged = append(merged, p)
-				seen[p] = true
-			}
-		}
-
-		// Ensure collection exists, then set paths
-		if _, err := db.GetOrCreateCollection(conn, name, "project", nil, merged); err != nil {
+		if err := setConfigPaths(cfg, name, merged); err != nil {
 			return err
+		}
+
+		if err := config.Save(cfg, ""); err != nil {
+			return fmt.Errorf("save config: %w", err)
 		}
 
 		fmt.Printf("Paths for %q:\n", name)
@@ -350,7 +333,7 @@ var pathsAddCmd = &cobra.Command{
 
 var pathsRemoveCmd = &cobra.Command{
 	Use:   "remove NAME PATH...",
-	Short: "Remove paths from a collection",
+	Short: "Remove paths from a collection in config",
 	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
@@ -360,15 +343,10 @@ var pathsRemoveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		conn, err := db.Open(cfg.ExpandedDBPath())
-		if err != nil {
-			return err
-		}
-		defer conn.Close()
 
-		existing, err := db.GetCollectionPaths(conn, name)
-		if err != nil {
-			return err
+		existing := getConfigPaths(cfg, name)
+		if len(existing) == 0 {
+			return fmt.Errorf("no paths configured for collection %q", name)
 		}
 
 		// Resolve paths for comparison
@@ -390,8 +368,12 @@ var pathsRemoveCmd = &cobra.Command{
 			}
 		}
 
-		if err := db.SetCollectionPaths(conn, name, remaining); err != nil {
+		if err := setConfigPaths(cfg, name, remaining); err != nil {
 			return err
+		}
+
+		if err := config.Save(cfg, ""); err != nil {
+			return fmt.Errorf("save config: %w", err)
 		}
 
 		if len(remaining) == 0 {
@@ -408,9 +390,9 @@ var pathsRemoveCmd = &cobra.Command{
 
 var pathsUpdateCmd = &cobra.Command{
 	Use:   "update NAME --old-prefix OLD --new-prefix NEW",
-	Short: "Rewrite paths in a collection (collection paths + source paths)",
-	Long: `Replace a path prefix in both the collection's stored paths and all
-source_path entries in the database. Useful after moving project files
+	Short: "Rewrite paths in a collection (config paths + source paths in DB)",
+	Long: `Replace a path prefix in both the collection's configured paths and all
+source_path entries in the database. Useful after moving files
 to a new location without needing to re-index.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -438,18 +420,9 @@ to a new location without needing to re-index.`,
 		if err != nil {
 			return err
 		}
-		conn, err := db.Open(cfg.ExpandedDBPath())
-		if err != nil {
-			return err
-		}
-		defer conn.Close()
 
-		// 1. Rewrite collection paths (JSON array in collections table)
-		existing, err := db.GetCollectionPaths(conn, name)
-		if err != nil {
-			return err
-		}
-
+		// 1. Rewrite config paths
+		existing := getConfigPaths(cfg, name)
 		updated := false
 		for i, p := range existing {
 			if strings.HasPrefix(p, oldPrefix) {
@@ -458,18 +431,27 @@ to a new location without needing to re-index.`,
 			}
 		}
 		if updated {
-			if err := db.SetCollectionPaths(conn, name, existing); err != nil {
+			if err := setConfigPaths(cfg, name, existing); err != nil {
 				return err
 			}
-			fmt.Println("Updated collection paths:")
+			if err := config.Save(cfg, ""); err != nil {
+				return fmt.Errorf("save config: %w", err)
+			}
+			fmt.Println("Updated config paths:")
 			for _, p := range existing {
 				fmt.Printf("  %s\n", p)
 			}
 		} else {
-			fmt.Println("No collection paths matched the old prefix.")
+			fmt.Println("No config paths matched the old prefix.")
 		}
 
-		// 2. Rewrite source_path entries
+		// 2. Rewrite source_path entries in DB
+		conn, err := db.Open(cfg.ExpandedDBPath())
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+
 		n, err := db.RewriteSourcePaths(conn, name, oldPrefix, newPrefix)
 		if err != nil {
 			return err
@@ -478,6 +460,61 @@ to a new location without needing to re-index.`,
 
 		return nil
 	},
+}
+
+// getConfigPaths returns the configured paths for a collection from config.
+func getConfigPaths(cfg *config.Config, name string) []string {
+	switch name {
+	case "obsidian":
+		return cfg.ObsidianVaults
+	case "calibre":
+		return cfg.CalibreLibraries
+	default:
+		if paths, ok := cfg.CodeGroups[name]; ok {
+			return paths
+		}
+		if paths, ok := cfg.Projects[name]; ok {
+			return paths
+		}
+		return nil
+	}
+}
+
+// setConfigPaths sets the paths for a collection in the config struct.
+func setConfigPaths(cfg *config.Config, name string, paths []string) error {
+	switch name {
+	case "obsidian":
+		cfg.ObsidianVaults = paths
+	case "calibre":
+		cfg.CalibreLibraries = paths
+	default:
+		if _, ok := cfg.CodeGroups[name]; ok {
+			cfg.CodeGroups[name] = paths
+			return nil
+		}
+		// Default to projects
+		if cfg.Projects == nil {
+			cfg.Projects = make(map[string][]string)
+		}
+		cfg.Projects[name] = paths
+	}
+	return nil
+}
+
+// mergeUnique merges two string slices, deduplicating entries.
+func mergeUnique(existing, additions []string) []string {
+	seen := make(map[string]bool, len(existing))
+	for _, p := range existing {
+		seen[p] = true
+	}
+	merged := append([]string{}, existing...)
+	for _, p := range additions {
+		if !seen[p] {
+			merged = append(merged, p)
+			seen[p] = true
+		}
+	}
+	return merged
 }
 
 // expandHome replaces a leading ~ with the user's home directory.

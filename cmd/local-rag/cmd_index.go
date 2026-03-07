@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -144,33 +143,44 @@ var indexRSSCmd = &cobra.Command{
 // --- index project ---
 
 var indexProjectCmd = &cobra.Command{
-	Use:   "project NAME [PATH...]",
-	Short: "Index documents from file paths into a named project collection",
-	Args:  cobra.MinimumNArgs(1),
+	Use:   "project [NAME]",
+	Short: "Index project document collections (from config)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name := args[0]
-		paths := args[1:]
-
 		cfg, conn, err := openConfigAndDB()
 		if err != nil {
 			return err
 		}
 		defer conn.Close()
 
-		if !cfg.IsCollectionEnabled(name) {
-			return fmt.Errorf("collection %q is disabled in config", name)
+		if len(cfg.Projects) == 0 {
+			return fmt.Errorf("no projects configured in config")
 		}
 
-		if len(paths) == 0 {
-			// Try to load paths from existing collection
-			paths = loadCollectionPaths(conn, name)
-			if len(paths) == 0 {
-				return fmt.Errorf("no paths provided and no stored paths found for %q", name)
+		var projectNames []string
+		if len(args) > 0 {
+			name := args[0]
+			if _, ok := cfg.Projects[name]; !ok {
+				return fmt.Errorf("project %q not found in config", name)
+			}
+			projectNames = []string{name}
+		} else {
+			for name := range cfg.Projects {
+				projectNames = append(projectNames, name)
 			}
 		}
 
-		result := indexer.IndexProject(conn, cfg, name, paths, forceIndex, progressCallback(name))
-		printResult(name, result)
+		for _, name := range projectNames {
+			if !cfg.IsCollectionEnabled(name) {
+				slog.Warn("collection is disabled, skipping", "name", name)
+				continue
+			}
+
+			autoPrune(conn, cfg, name)
+			paths := cfg.Projects[name]
+			fmt.Printf("project: %s\n", name)
+			result := indexer.IndexProject(conn, cfg, name, paths, forceIndex, progressCallback(name))
+			printResult(name, result)
+		}
 		return nil
 	},
 }
@@ -236,12 +246,17 @@ var indexAllCmd = &cobra.Command{
 		}
 		defer conn.Close()
 
-		// Auto-prune obsidian and code collections before indexing
+		// Auto-prune obsidian, code, and project collections before indexing
 		if !noPrune {
 			autoPrune(conn, cfg, "obsidian")
 			for groupName := range cfg.CodeGroups {
 				if cfg.IsCollectionEnabled(groupName) {
 					autoPrune(conn, cfg, groupName)
+				}
+			}
+			for projectName := range cfg.Projects {
+				if cfg.IsCollectionEnabled(projectName) {
+					autoPrune(conn, cfg, projectName)
 				}
 			}
 		}
@@ -305,29 +320,18 @@ var indexAllCmd = &cobra.Command{
 			}
 		}
 
-		// Project collections from DB
-		rows, err := conn.Query("SELECT name, paths FROM collections WHERE collection_type = 'project' AND paths IS NOT NULL")
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var name, pathsJSON string
-				if rows.Scan(&name, &pathsJSON) == nil && pathsJSON != "" {
-					n := name
-					pj := pathsJSON
-					if cfg.IsCollectionEnabled(n) {
-						sources = append(sources, indexSource{
-							label: n,
-							run: func() *indexer.IndexResult {
-								var paths []string
-								if err := parseJSON(pj, &paths); err == nil && len(paths) > 0 {
-									return indexer.IndexProject(conn, cfg, n, paths, forceIndex, progressCallback(n))
-								}
-								return &indexer.IndexResult{}
-							},
-						})
-					}
-				}
+		// Project collections from config
+		for projectName, projectPaths := range cfg.Projects {
+			if !cfg.IsCollectionEnabled(projectName) {
+				continue
 			}
+			pn, pp := projectName, projectPaths
+			sources = append(sources, indexSource{
+				label: pn,
+				run: func() *indexer.IndexResult {
+					return indexer.IndexProject(conn, cfg, pn, pp, forceIndex, progressCallback(pn))
+				},
+			})
 		}
 
 		if len(sources) == 0 {
@@ -419,17 +423,6 @@ func truncateStr(s string, maxLen int) string {
 	return s[:maxLen]
 }
 
-func loadCollectionPaths(conn *sql.DB, name string) []string {
-	paths, err := db.GetCollectionPaths(conn, name)
-	if err != nil {
-		return nil
-	}
-	return paths
-}
-
-func parseJSON(data string, v any) error {
-	return json.Unmarshal([]byte(data), v)
-}
 
 func autoPrune(conn *sql.DB, cfg *config.Config, collectionName string) {
 	if noPrune {
