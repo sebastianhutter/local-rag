@@ -406,6 +406,80 @@ var pathsRemoveCmd = &cobra.Command{
 	},
 }
 
+var pathsUpdateCmd = &cobra.Command{
+	Use:   "update NAME --old-prefix OLD --new-prefix NEW",
+	Short: "Rewrite paths in a collection (collection paths + source paths)",
+	Long: `Replace a path prefix in both the collection's stored paths and all
+source_path entries in the database. Useful after moving project files
+to a new location without needing to re-index.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := args[0]
+		oldPrefix, _ := cmd.Flags().GetString("old-prefix")
+		newPrefix, _ := cmd.Flags().GetString("new-prefix")
+
+		if oldPrefix == "" || newPrefix == "" {
+			return fmt.Errorf("both --old-prefix and --new-prefix are required")
+		}
+
+		// Resolve prefixes to absolute paths
+		oldPrefix = expandHome(oldPrefix)
+		absOld, err := filepath.Abs(oldPrefix)
+		if err == nil {
+			oldPrefix = absOld
+		}
+		newPrefix = expandHome(newPrefix)
+		absNew, err := filepath.Abs(newPrefix)
+		if err == nil {
+			newPrefix = absNew
+		}
+
+		cfg, err := config.Load("")
+		if err != nil {
+			return err
+		}
+		conn, err := db.Open(cfg.ExpandedDBPath())
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+
+		// 1. Rewrite collection paths (JSON array in collections table)
+		existing, err := db.GetCollectionPaths(conn, name)
+		if err != nil {
+			return err
+		}
+
+		updated := false
+		for i, p := range existing {
+			if strings.HasPrefix(p, oldPrefix) {
+				existing[i] = newPrefix + p[len(oldPrefix):]
+				updated = true
+			}
+		}
+		if updated {
+			if err := db.SetCollectionPaths(conn, name, existing); err != nil {
+				return err
+			}
+			fmt.Println("Updated collection paths:")
+			for _, p := range existing {
+				fmt.Printf("  %s\n", p)
+			}
+		} else {
+			fmt.Println("No collection paths matched the old prefix.")
+		}
+
+		// 2. Rewrite source_path entries
+		n, err := db.RewriteSourcePaths(conn, name, oldPrefix, newPrefix)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Updated %d source path(s) in the database.\n", n)
+
+		return nil
+	},
+}
+
 // expandHome replaces a leading ~ with the user's home directory.
 func expandHome(path string) string {
 	if path == "~" || strings.HasPrefix(path, "~/") {
@@ -421,9 +495,13 @@ func expandHome(path string) string {
 func init() {
 	collectionsDeleteCmd.Flags().BoolVarP(&deleteYes, "yes", "y", false, "Skip confirmation")
 
+	pathsUpdateCmd.Flags().String("old-prefix", "", "Path prefix to replace")
+	pathsUpdateCmd.Flags().String("new-prefix", "", "New path prefix")
+
 	pathsCmd.AddCommand(pathsListCmd)
 	pathsCmd.AddCommand(pathsAddCmd)
 	pathsCmd.AddCommand(pathsRemoveCmd)
+	pathsCmd.AddCommand(pathsUpdateCmd)
 
 	collectionsCmd.AddCommand(collectionsListCmd)
 	collectionsCmd.AddCommand(collectionsInfoCmd)

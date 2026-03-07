@@ -260,6 +260,8 @@ local-rag collections export NAME                # Export collection metadata as
 local-rag collections paths list NAME            # List stored paths for a collection
 local-rag collections paths add NAME PATH...     # Add paths to a collection
 local-rag collections paths remove NAME PATH...  # Remove paths from a collection
+local-rag collections paths update NAME \        # Rewrite path prefixes in-place
+  --old-prefix OLD --new-prefix NEW              # (collection paths + source paths)
 
 # Status and GUI
 local-rag status                        # Overall stats: collections, doc counts, DB size, Ollama status
