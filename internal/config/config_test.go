@@ -58,7 +58,7 @@ func TestLoadAndSaveRoundTrip(t *testing.T) {
 	original.EmbeddingModel = "mxbai-embed-large"
 	original.ChunkSizeTokens = 300
 	original.ObsidianVaults = []string{"/tmp/vault1"}
-	original.CodeGroups = map[string][]string{
+	original.Repositories = map[string][]string{
 		"myorg": {"/tmp/repo1", "/tmp/repo2"},
 	}
 	original.DisabledCollections = []string{"rss"}
@@ -83,8 +83,8 @@ func TestLoadAndSaveRoundTrip(t *testing.T) {
 	if len(loaded.ObsidianVaults) != 1 || loaded.ObsidianVaults[0] != "/tmp/vault1" {
 		t.Errorf("ObsidianVaults = %v, want [/tmp/vault1]", loaded.ObsidianVaults)
 	}
-	if len(loaded.CodeGroups["myorg"]) != 2 {
-		t.Errorf("CodeGroups[myorg] = %v, want 2 items", loaded.CodeGroups["myorg"])
+	if len(loaded.Repositories["myorg"]) != 2 {
+		t.Errorf("Repositories[myorg] = %v, want 2 items", loaded.Repositories["myorg"])
 	}
 	if loaded.SearchDefaults.VectorWeight != 0.6 {
 		t.Errorf("VectorWeight = %f, want 0.6", loaded.SearchDefaults.VectorWeight)

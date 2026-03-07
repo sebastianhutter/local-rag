@@ -151,7 +151,7 @@ local-rag index obsidian --force
 local-rag index email --force
 local-rag index calibre --force
 local-rag index rss --force
-local-rag index group --force
+local-rag index code --force
 # Repeat for any project collections as well
 ```
 

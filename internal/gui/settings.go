@@ -61,7 +61,7 @@ func (a *App) openSettings() {
 	// Build all 8 tabs.
 	generalTab := a.buildGeneralTab(&cfg, w)
 	sourcesTab := a.buildSourcesTab(&cfg, w)
-	codeGroupsTab := a.buildCodeGroupsTab(&cfg, w)
+	repositoriesTab := a.buildRepositoriesTab(&cfg, w)
 	projectsTab := a.buildProjectsTab(&cfg, w)
 	searchTab := a.buildSearchTab(&cfg)
 	ocrTab := a.buildOCRTab(&cfg)
@@ -71,7 +71,7 @@ func (a *App) openSettings() {
 	tabs := container.NewAppTabs(
 		container.NewTabItem("General", generalTab),
 		container.NewTabItem("Sources", sourcesTab),
-		container.NewTabItem("Code Groups", codeGroupsTab),
+		container.NewTabItem("Repositories", repositoriesTab),
 		container.NewTabItem("Projects", projectsTab),
 		container.NewTabItem("Search", searchTab),
 		container.NewTabItem("OCR", ocrTab),
@@ -218,86 +218,84 @@ func (a *App) buildSourcesTab(cfg *config.Config, w fyne.Window) fyne.CanvasObje
 }
 
 // ---------------------------------------------------------------------------
-// Tab 3 — Code Groups
+// Tab 3 — Repositories
 // ---------------------------------------------------------------------------
 
-func (a *App) buildCodeGroupsTab(cfg *config.Config, w fyne.Window) fyne.CanvasObject {
-	if cfg.CodeGroups == nil {
-		cfg.CodeGroups = make(map[string][]string)
+func (a *App) buildRepositoriesTab(cfg *config.Config, w fyne.Window) fyne.CanvasObject {
+	if cfg.Repositories == nil {
+		cfg.Repositories = make(map[string][]string)
 	}
 
-	// Flat VBox that renders groups + repos as plain labels.
-	// Rebuilt whenever groups change via the rebuild() closure.
-	groupsBox := container.NewVBox()
+	reposBox := container.NewVBox()
 
 	var rebuild func()
 	rebuild = func() {
-		groupsBox.RemoveAll()
-		if len(cfg.CodeGroups) == 0 {
-			groupsBox.Add(widget.NewLabel("No code groups configured."))
+		reposBox.RemoveAll()
+		if len(cfg.Repositories) == 0 {
+			reposBox.Add(widget.NewLabel("No repositories configured."))
 			return
 		}
-		for groupName, repos := range cfg.CodeGroups {
-			gn := groupName
-			header := widget.NewLabel(gn)
+		for repoName, repos := range cfg.Repositories {
+			rn := repoName
+			header := widget.NewLabel(rn)
 			header.TextStyle.Bold = true
 
-			removeGroupBtn := widget.NewButton("Remove Group", func() {
-				dialog.ShowConfirm("Remove Group",
-					fmt.Sprintf("Remove group '%s' and all its repos?", gn),
+			removeBtn := widget.NewButton("Remove", func() {
+				dialog.ShowConfirm("Remove Repository Collection",
+					fmt.Sprintf("Remove '%s' and all its repos?", rn),
 					func(yes bool) {
 						if yes {
-							delete(cfg.CodeGroups, gn)
+							delete(cfg.Repositories, rn)
 							rebuild()
 						}
 					}, w)
 			})
 
-			groupsBox.Add(container.NewHBox(header, removeGroupBtn))
+			reposBox.Add(container.NewHBox(header, removeBtn))
 			for _, repo := range repos {
 				repoLabel := widget.NewLabel("    " + repo)
 				repoLabel.Wrapping = fyne.TextTruncate
-				groupsBox.Add(repoLabel)
+				reposBox.Add(repoLabel)
 			}
-			groupsBox.Add(widget.NewSeparator())
+			reposBox.Add(widget.NewSeparator())
 		}
 	}
 	rebuild()
 
-	addGroupBtn := widget.NewButton("Add Group", func() {
+	addCollectionBtn := widget.NewButton("Add Collection", func() {
 		entry := widget.NewEntry()
-		entry.SetPlaceHolder("Group name")
-		dialog.ShowForm("Add Code Group", "Add", "Cancel",
+		entry.SetPlaceHolder("Collection name")
+		dialog.ShowForm("Add Repository Collection", "Add", "Cancel",
 			[]*widget.FormItem{widget.NewFormItem("Name", entry)},
 			func(ok bool) {
 				if ok && entry.Text != "" {
-					cfg.CodeGroups[entry.Text] = []string{}
+					cfg.Repositories[entry.Text] = []string{}
 					rebuild()
 				}
 			}, w)
 	})
 
 	addRepoBtn := widget.NewButton("Add Repo", func() {
-		if len(cfg.CodeGroups) == 0 {
-			dialog.ShowInformation("No Groups", "Create a code group first.", w)
+		if len(cfg.Repositories) == 0 {
+			dialog.ShowInformation("No Collections", "Create a repository collection first.", w)
 			return
 		}
 		var names []string
-		for name := range cfg.CodeGroups {
+		for name := range cfg.Repositories {
 			names = append(names, name)
 		}
 		sel := widget.NewSelect(names, nil)
 		sel.SetSelected(names[0])
-		dialog.ShowForm("Select Group", "Next", "Cancel",
-			[]*widget.FormItem{widget.NewFormItem("Group", sel)},
+		dialog.ShowForm("Select Collection", "Next", "Cancel",
+			[]*widget.FormItem{widget.NewFormItem("Collection", sel)},
 			func(ok bool) {
 				if !ok || sel.Selected == "" {
 					return
 				}
-				group := sel.Selected
+				collection := sel.Selected
 				dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
 					if uri != nil {
-						cfg.CodeGroups[group] = append(cfg.CodeGroups[group], uri.Path())
+						cfg.Repositories[collection] = append(cfg.Repositories[collection], uri.Path())
 						rebuild()
 					}
 				}, w)
@@ -317,10 +315,10 @@ func (a *App) buildCodeGroupsTab(cfg *config.Config, w fyne.Window) fyne.CanvasO
 	// Commit blacklist
 	blacklistWidget := newStringListWidget(&cfg.GitCommitSubjectBlacklist, "Add Pattern", w, false)
 
-	buttons := container.NewHBox(addGroupBtn, addRepoBtn)
+	buttons := container.NewHBox(addCollectionBtn, addRepoBtn)
 
 	return container.NewVScroll(container.NewVBox(
-		widget.NewCard("Code Groups", "", container.NewVBox(buttons, groupsBox)),
+		widget.NewCard("Repositories", "", container.NewVBox(buttons, reposBox)),
 		widget.NewCard("Git History", "",
 			widget.NewForm(
 				widget.NewFormItem("History months", historyEntry),
