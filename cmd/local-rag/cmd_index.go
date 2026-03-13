@@ -223,7 +223,7 @@ var indexCodeCmd = &cobra.Command{
 			}
 
 			autoPrune(conn, cfg, repoName)
-			repos := cfg.Repositories[repoName]
+			repos := indexer.ResolveRepoPaths(cfg.Repositories[repoName])
 			for _, repoPath := range repos {
 				fmt.Printf("%s: %s\n", repoName, repoPath)
 				result := indexer.IndexGitRepo(conn, cfg, repoPath, repoName, forceIndex, indexHistory, progressCallback(repoName))
@@ -304,10 +304,11 @@ var indexAllCmd = &cobra.Command{
 			})
 		}
 
-		for repoName, repos := range cfg.Repositories {
+		for repoName, configPaths := range cfg.Repositories {
 			if !cfg.IsCollectionEnabled(repoName) {
 				continue
 			}
+			repos := indexer.ResolveRepoPaths(configPaths)
 			for _, repoPath := range repos {
 				rn, rp := repoName, repoPath
 				label := fmt.Sprintf("%s/%s", rn, filepath.Base(rp))

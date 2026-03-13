@@ -670,3 +670,91 @@ func makeWatermarks(watermarks map[string]string) string {
 	b, _ := json.Marshal(watermarks)
 	return string(b)
 }
+
+// DiscoverGitRepos returns all git repository root paths at or under root.
+// If root itself is a git repo, it returns just [root].
+// Otherwise it walks subdirectories, stopping descent when a .git dir is found
+// (so submodules are not returned as separate repos).
+func DiscoverGitRepos(root string) ([]string, error) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return nil, fmt.Errorf("abs path: %w", err)
+	}
+
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", root, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", root)
+	}
+
+	// If root itself is a git repo, return it directly.
+	if isGitRepo(root) {
+		return []string{root}, nil
+	}
+
+	var repos []string
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			slog.Warn("discover repos: error walking", "path", path, "err", err)
+			return filepath.SkipDir
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		// Skip the root itself (already checked above).
+		if path == root {
+			return nil
+		}
+		// Check if this directory is a git repo.
+		gitDir := filepath.Join(path, ".git")
+		if fi, statErr := os.Stat(gitDir); statErr == nil && fi.IsDir() {
+			repos = append(repos, path)
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	if err != nil {
+		return repos, fmt.Errorf("walk %s: %w", root, err)
+	}
+
+	return repos, nil
+}
+
+// ResolveRepoPaths takes a list of configured paths (which may be git repos or
+// parent directories containing repos) and returns a deduplicated list of
+// discovered git repository paths.
+func ResolveRepoPaths(configPaths []string) []string {
+	seen := make(map[string]bool)
+	var resolved []string
+
+	for _, p := range configPaths {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			slog.Warn("resolve repo path: cannot get abs path", "path", p, "err", err)
+			continue
+		}
+
+		discovered, err := DiscoverGitRepos(abs)
+		if err != nil {
+			slog.Warn("discover repos failed", "path", abs, "err", err)
+			continue
+		}
+		if len(discovered) == 0 {
+			slog.Warn("no git repos found under path", "path", abs)
+			continue
+		}
+		if len(discovered) > 1 {
+			slog.Info("discovered git repos", "root", abs, "count", len(discovered))
+		}
+		for _, d := range discovered {
+			if !seen[d] {
+				seen[d] = true
+				resolved = append(resolved, d)
+			}
+		}
+	}
+
+	return resolved
+}

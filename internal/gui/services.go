@@ -225,10 +225,11 @@ func (s *IndexingService) IndexAll(cfg *config.Config, onComplete func(error)) {
 	}
 
 	// Code repositories.
-	for groupName, repos := range cfg.Repositories {
+	for groupName, configPaths := range cfg.Repositories {
 		if !cfg.IsCollectionEnabled(groupName) {
 			continue
 		}
+		repos := indexer.ResolveRepoPaths(configPaths)
 		for _, repoPath := range repos {
 			s.setLabel(groupName)
 			indexer.IndexGitRepo(conn, cfg, repoPath, groupName, false, true, nil)
@@ -287,7 +288,8 @@ func (s *IndexingService) IndexCollection(name string, cfg *config.Config, onCom
 		indexer.IndexRSS(conn, cfg, false, nil)
 	default:
 		// Check if it's a repository collection.
-		if repos, ok := cfg.Repositories[name]; ok {
+		if configPaths, ok := cfg.Repositories[name]; ok {
+			repos := indexer.ResolveRepoPaths(configPaths)
 			for _, repoPath := range repos {
 				indexer.IndexGitRepo(conn, cfg, repoPath, name, false, true, nil)
 			}
