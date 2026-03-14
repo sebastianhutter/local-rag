@@ -76,6 +76,10 @@ func IndexGitRepo(conn *sql.DB, cfg *config.Config, repoPath, collectionName str
 	}
 
 	headSHA := getHeadSHA(repoPath)
+	if headSHA == "" {
+		slog.Warn("skipping repo with no commits", "path", repoPath)
+		return &IndexResult{}
+	}
 	slog.Info("git repo", "path", repoPath, "HEAD", headSHA[:12])
 
 	collectionID := getOrCreate(conn, collectionName, "code")
