@@ -275,7 +275,7 @@ func (a *App) buildRepositoriesTab(cfg *config.Config, w fyne.Window) fyne.Canva
 			}, w)
 	})
 
-	addRepoBtn := widget.NewButton("Add Repo", func() {
+	addRepoBtn := widget.NewButton("Add Path", func() {
 		if len(cfg.Repositories) == 0 {
 			dialog.ShowInformation("No Collections", "Create a repository collection first.", w)
 			return

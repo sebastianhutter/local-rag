@@ -98,7 +98,7 @@ flowchart LR
 | **eM Client** | `email` | `index email` | SQLite databases (read-only) — subject, body, sender, recipients, date, folder |
 | **Calibre** | `calibre` | `index calibre` | SQLite metadata.db + book files (read-only) — EPUB/PDF content with author, tags, series metadata |
 | **NetNewsWire** | `rss` | `index rss` | SQLite databases (read-only) — RSS article title, author, content, feed name |
-| **Code Repositories** | repo name | `index code [NAME]` | Git repos grouped by org/topic — tree-sitter structural parsing + commit history (messages and per-file diffs), respects .gitignore |
+| **Code Repositories** | repo name | `index code [NAME]` | Git repos grouped by org/topic — paths can be direct repos or parent directories (repos are discovered recursively). Tree-sitter structural parsing + commit history (messages and per-file diffs), respects .gitignore |
 | **Project Docs** | user name | `index project [NAME]` | Any folder — files dispatched to correct parser by extension, paths from config |
 
 ---
@@ -302,7 +302,7 @@ Config file location: `~/.local-rag/config.json`
   ],
   "netnewswire_db_path": "~/Library/Containers/com.ranchero.NetNewsWire-Evergreen/Data/Library/Application Support/NetNewsWire/Accounts",
   "repositories": {
-    "my-org": ["~/Repository/my-org/repo1", "~/Repository/my-org/repo2"],
+    "my-org": ["~/Repository/my-org"],
     "terraform": ["~/Repository/my-org/tf-infra", "~/Repository/other-org/tf-modules"]
   },
   "projects": {

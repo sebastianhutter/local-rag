@@ -10,7 +10,7 @@ A fully local, privacy-preserving RAG (Retrieval Augmented Generation) system fo
 | **eM Client**    | system          | Emails — subject, body, sender, recipients, date, folder                         |
 | **Calibre**      | system          | Ebook metadata + content — EPUB/PDF with author, tags, series                    |
 | **NetNewsWire**  | system          | RSS articles — title, author, content, feed name                                 |
-| **Code Repos**   | code            | Git repos grouped by org/topic — tree-sitter structural parsing + commit history |
+| **Code Repos**   | code            | Git repos — paths can be direct repos or parent dirs (auto-discovered recursively). Tree-sitter structural parsing + commit history |
 | **Project Docs** | project         | Any folder of documents dispatched to the correct parser by extension            |
 
 ## Installation
@@ -54,7 +54,7 @@ Requires Go 1.24+, CGO enabled (for SQLite), and macOS (for `sips`/`iconutil`/`h
   "obsidian_vaults": ["~/Documents/MyVault"],
   "calibre_libraries": ["~/CalibreLibrary"],
   "repositories": {
-    "my-org": ["~/Repository/my-org/repo1", "~/Repository/my-org/repo2"]
+    "my-org": ["~/Repository/my-org"]
   },
   "projects": {
     "client-docs": ["~/Documents/client-project/specs"]
@@ -226,7 +226,7 @@ Config file: `~/.local-rag/config.json`
 | `emclient_db_path`                  | `~/Library/Application Support/eM Client` | eM Client database path                  |
 | `calibre_libraries`                 | `[]`                                      | Paths to Calibre libraries               |
 | `netnewswire_db_path`               | *(auto-detected)*                         | NetNewsWire database path                |
-| `repositories`                      | `{}`                                      | Map of collection name to repo paths     |
+| `repositories`                      | `{}`                                      | Map of collection name to repo/directory paths (directories are scanned recursively for git repos) |
 | `projects`                          | `{}`                                      | Map of project name to document paths    |
 | `disabled_collections`              | `[]`                                      | Collection names to skip during indexing |
 | `git_history_in_months`             | `6`                                       | How far back to index commit history     |

@@ -1,6 +1,10 @@
 package indexer
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
 	"testing"
 )
 
@@ -104,5 +108,121 @@ func TestIsGitRepo(t *testing.T) {
 	tmpDir := t.TempDir()
 	if isGitRepo(tmpDir) {
 		t.Error("temp dir should not be a git repo")
+	}
+}
+
+// gitInit runs git init in the given directory.
+func gitInit(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command("git", "init", dir)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init %s: %v\n%s", dir, err, out)
+	}
+}
+
+func TestDiscoverGitRepos_SingleRepo(t *testing.T) {
+	dir := t.TempDir()
+	gitInit(t, dir)
+
+	repos, err := DiscoverGitRepos(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 1 || repos[0] != dir {
+		t.Errorf("expected [%s], got %v", dir, repos)
+	}
+}
+
+func TestDiscoverGitRepos_ParentDir(t *testing.T) {
+	parent := t.TempDir()
+	repoA := filepath.Join(parent, "repo-a")
+	repoB := filepath.Join(parent, "repo-b")
+	os.MkdirAll(repoA, 0o755)
+	os.MkdirAll(repoB, 0o755)
+	gitInit(t, repoA)
+	gitInit(t, repoB)
+
+	repos, err := DiscoverGitRepos(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(repos)
+	if len(repos) != 2 {
+		t.Fatalf("expected 2 repos, got %d: %v", len(repos), repos)
+	}
+	if repos[0] != repoA || repos[1] != repoB {
+		t.Errorf("expected [%s, %s], got %v", repoA, repoB, repos)
+	}
+}
+
+func TestDiscoverGitRepos_NestedStopsAtGit(t *testing.T) {
+	parent := t.TempDir()
+	outer := filepath.Join(parent, "outer")
+	inner := filepath.Join(outer, "sub", "inner")
+	os.MkdirAll(inner, 0o755)
+	gitInit(t, outer)
+	gitInit(t, inner) // simulates a submodule
+
+	repos, err := DiscoverGitRepos(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Should only find outer, not inner
+	if len(repos) != 1 || repos[0] != outer {
+		t.Errorf("expected [%s], got %v", outer, repos)
+	}
+}
+
+func TestDiscoverGitRepos_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	repos, err := DiscoverGitRepos(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 0 {
+		t.Errorf("expected empty, got %v", repos)
+	}
+}
+
+func TestDiscoverGitRepos_NotADir(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "file.txt")
+	os.WriteFile(f, []byte("hello"), 0o644)
+
+	_, err := DiscoverGitRepos(f)
+	if err == nil {
+		t.Error("expected error for non-directory path")
+	}
+}
+
+func TestResolveRepoPaths_Mixed(t *testing.T) {
+	parent := t.TempDir()
+	repoA := filepath.Join(parent, "repo-a")
+	repoB := filepath.Join(parent, "repo-b")
+	repoC := filepath.Join(t.TempDir(), "standalone")
+	os.MkdirAll(repoA, 0o755)
+	os.MkdirAll(repoB, 0o755)
+	os.MkdirAll(repoC, 0o755)
+	gitInit(t, repoA)
+	gitInit(t, repoB)
+	gitInit(t, repoC)
+
+	// Mix: one parent dir + one direct repo
+	resolved := ResolveRepoPaths([]string{parent, repoC})
+	if len(resolved) != 3 {
+		t.Fatalf("expected 3 repos, got %d: %v", len(resolved), resolved)
+	}
+}
+
+func TestResolveRepoPaths_Dedup(t *testing.T) {
+	parent := t.TempDir()
+	repo := filepath.Join(parent, "repo")
+	os.MkdirAll(repo, 0o755)
+	gitInit(t, repo)
+
+	// Both the parent (discovers repo) and repo itself should deduplicate
+	resolved := ResolveRepoPaths([]string{parent, repo})
+	if len(resolved) != 1 {
+		t.Errorf("expected 1 deduplicated repo, got %d: %v", len(resolved), resolved)
 	}
 }
