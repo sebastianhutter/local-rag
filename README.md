@@ -257,7 +257,7 @@ Config file: `~/.local-rag/config.json`
 | MCP          | mcp-go                     | SSE and stdio transports               |
 | PDF          | go-pdfium (WASM/Wazero)    | No CGO needed for PDF                  |
 | PDF OCR      | tesseract (optional)       | Fallback for scanned/image-only PDFs   |
-| DOCX         | lu4p/cat                   | Word document extraction               |
+| DOCX         | archive/zip + encoding/xml | Word document extraction (.docx, .dotx)|
 | Code parsing | go-tree-sitter             | 13 languages with structural splitting |
 | CLI          | Cobra                      | Subcommands, flags, help               |
 | HTML cleanup | golang.org/x/net/html      | Strip tags from email/RSS              |

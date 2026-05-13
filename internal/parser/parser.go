@@ -14,6 +14,7 @@ var ExtensionMap = map[string]string{
 	".md":    "markdown",
 	".pdf":   "pdf",
 	".docx":  "docx",
+	".dotx":  "docx",
 	".html":  "html",
 	".htm":   "html",
 	".txt":   "plaintext",

@@ -121,7 +121,7 @@ File on disk / SQLite database
 Parser (type-specific)
     |  Markdown: extract frontmatter, wikilinks, tags, strip dataview
     |  PDF: extract text page-by-page (go-pdfium / WASM)
-    |  DOCX: extract paragraphs and headings (lu4p/cat)
+    |  DOCX/DOTX: extract paragraphs (archive/zip + encoding/xml)
     |  EPUB: extract chapters (zip + XML)
     |  HTML: extract text (golang.org/x/net/html)
     |  Code: go-tree-sitter structural parsing (functions, classes, etc.)
@@ -190,7 +190,7 @@ Relationships: `collections` 1:N `sources` 1:N `documents`. CASCADE deletes ensu
 |-----------------------------------------------------------------------|--------------------------------------------------|-----------------------------------|
 | `.md`                                                                 | Obsidian markdown (frontmatter, wikilinks, tags) | Heading-aware splitting           |
 | `.pdf`                                                                | go-pdfium (WASM/Wazero) page-by-page             | Per-page plain chunking           |
-| `.docx`                                                               | lu4p/cat (paragraphs, headings)                  | Plain chunking                    |
+| `.docx` / `.dotx`                                                     | archive/zip + encoding/xml                       | Plain chunking                    |
 | `.epub`                                                               | zip + XML chapter extraction                     | Per-chapter plain chunking        |
 | `.html` / `.htm`                                                      | golang.org/x/net/html text extraction            | Plain chunking                    |
 | `.txt` / `.csv` / `.json` / `.yaml` / `.yml`                          | Read as plaintext                                | Plain chunking                    |
