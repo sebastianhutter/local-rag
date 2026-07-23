@@ -167,7 +167,18 @@ func (a *App) buildGeneralTab(cfg *config.Config, w fyne.Window) fyne.CanvasObje
 		widget.NewFormItem("Chunk overlap (tokens)", overlapEntry),
 	)
 
-	return container.NewVScroll(form)
+	// Ordered list of Ollama endpoints. The first one that is reachable and
+	// already serves the embedding model is used; empty falls back to local.
+	hostsList := newStringListWidget(&cfg.EmbeddingHosts, "Add Ollama Host", w, false)
+
+	return container.NewVScroll(container.NewVBox(
+		widget.NewCard("General", "", form),
+		widget.NewCard(
+			"Ollama Hosts",
+			"Ordered; first reachable host that has the model is used. Empty = local. e.g. http://192.168.30.90:11434",
+			hostsList,
+		),
+	))
 }
 
 // ---------------------------------------------------------------------------
