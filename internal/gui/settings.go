@@ -761,6 +761,7 @@ func (a *App) deleteCollection(name string) {
 		return
 	}
 
+	conn.Exec("DELETE FROM vec_documents_bin WHERE document_id IN (SELECT id FROM documents WHERE collection_id = ?)", id)
 	conn.Exec("DELETE FROM vec_documents WHERE document_id IN (SELECT id FROM documents WHERE collection_id = ?)", id)
 	conn.Exec("DELETE FROM collections WHERE id = ?", id)
 	slog.Info("deleted collection", "name", name)

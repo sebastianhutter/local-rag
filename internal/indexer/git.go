@@ -14,6 +14,7 @@ import (
 
 	"github.com/sebastianhutter/local-rag-go/internal/chunker"
 	"github.com/sebastianhutter/local-rag-go/internal/config"
+	"github.com/sebastianhutter/local-rag-go/internal/db"
 	"github.com/sebastianhutter/local-rag-go/internal/embeddings"
 	"github.com/sebastianhutter/local-rag-go/internal/parser"
 )
@@ -25,26 +26,26 @@ var excludePatterns = map[string]bool{
 	"go.sum":              true,
 	"package-lock.json":   true,
 	"yarn.lock":           true,
-	"pnpm-lock.yaml":     true,
+	"pnpm-lock.yaml":      true,
 	"Cargo.lock":          true,
 	"poetry.lock":         true,
 	"uv.lock":             true,
 }
 
 var excludeDirPatterns = map[string]bool{
-	".idea":          true,
-	".vscode":        true,
-	"node_modules":   true,
-	"__pycache__":    true,
-	".mypy_cache":    true,
-	".pytest_cache":  true,
-	".tox":           true,
-	"dist":           true,
-	"build":          true,
-	".egg-info":      true,
-	"vendor":         true,
-	".terraform":     true,
-	"cdk.out":        true,
+	".idea":         true,
+	".vscode":       true,
+	"node_modules":  true,
+	"__pycache__":   true,
+	".mypy_cache":   true,
+	".pytest_cache": true,
+	".tox":          true,
+	"dist":          true,
+	"build":         true,
+	".egg-info":     true,
+	"vendor":        true,
+	".terraform":    true,
+	"cdk.out":       true,
 }
 
 const watermarkPrefix = "git:"
@@ -243,7 +244,7 @@ func indexCodeFile(conn *sql.DB, cfg *config.Config, repoPath, relPath string, c
 		}
 		docID, _ := res.LastInsertId()
 		vecBytes := embeddings.SerializeFloat32(vecs[i])
-		conn.Exec("INSERT INTO vec_documents (embedding, document_id) VALUES (?, ?)", vecBytes, docID)
+		_ = db.InsertEmbedding(conn, docID, vecBytes)
 	}
 
 	slog.Info("indexed code file", "path", relPath, "chunks", len(chunks))
@@ -404,7 +405,7 @@ func indexGitHistory(conn *sql.DB, cfg *config.Config, repoPath string, collecti
 			}
 			docID, _ := docRes.LastInsertId()
 			vecBytes := embeddings.SerializeFloat32(vecs[j])
-			conn.Exec("INSERT INTO vec_documents (embedding, document_id) VALUES (?, ?)", vecBytes, docID)
+			_ = db.InsertEmbedding(conn, docID, vecBytes)
 		}
 
 		result.Indexed++

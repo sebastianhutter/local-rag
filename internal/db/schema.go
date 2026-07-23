@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 )
 
 // SchemaVersion is the current schema version. Bump this when adding migrations.
-const SchemaVersion = 3
+const SchemaVersion = 4
 
 // InitSchema creates all tables, virtual tables, and triggers if they don't exist.
 func InitSchema(db *sql.DB, embeddingDim int) error {
@@ -50,6 +51,14 @@ func InitSchema(db *sql.DB, embeddingDim int) error {
 			document_id INTEGER
 		);
 
+		-- Binary-quantized mirror of vec_documents for fast candidate retrieval.
+		-- Each row shares the rowid of its vec_documents counterpart, so exact
+		-- float vectors can be fetched by rowid for reranking. See search package.
+		CREATE VIRTUAL TABLE IF NOT EXISTS vec_documents_bin USING vec0(
+			embedding bit[%[1]d],
+			document_id INTEGER
+		);
+
 		CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
 			title,
 			content,
@@ -78,6 +87,10 @@ func InitSchema(db *sql.DB, embeddingDim int) error {
 			key TEXT PRIMARY KEY,
 			value TEXT
 		);
+
+		-- Speeds up per-collection COUNT/aggregation (collections list/info) and
+		-- collection-scoped deletes. Without it, those queries full-scan documents.
+		CREATE INDEX IF NOT EXISTS idx_documents_collection_id ON documents(collection_id);
 	`, embeddingDim)
 
 	if _, err := db.Exec(schema); err != nil {
@@ -98,7 +111,115 @@ func InitSchema(db *sql.DB, embeddingDim int) error {
 		return fmt.Errorf("check schema version: %w", err)
 	}
 
+	if err := backfillBinaryVectors(db); err != nil {
+		return fmt.Errorf("backfill binary vectors: %w", err)
+	}
+
 	slog.Info("database schema initialized", "version", SchemaVersion, "embedding_dim", embeddingDim)
+	return nil
+}
+
+// binaryBackfillDoneKey marks that vec_documents_bin has been fully populated
+// from the existing vec_documents rows. Once set, InitSchema skips the check
+// on subsequent opens, keeping the search hot path cheap.
+const binaryBackfillDoneKey = "binary_backfill_done"
+
+// backfillBinaryVectors populates vec_documents_bin with binary-quantized copies
+// of every vec_documents row that does not yet have one. It runs once (guarded
+// by a meta flag) to migrate databases created before binary quantization was
+// added; new inserts keep the two tables in sync via InsertEmbedding.
+func backfillBinaryVectors(db *sql.DB) error {
+	var done sql.NullString
+	err := db.QueryRow("SELECT value FROM meta WHERE key = ?", binaryBackfillDoneKey).Scan(&done)
+	if err == nil && done.Valid && done.String == "1" {
+		return nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("check backfill flag: %w", err)
+	}
+
+	// Compare row counts (cheap — reads the rowid shadow tables, not vectors).
+	var floatCount, binCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM vec_documents").Scan(&floatCount); err != nil {
+		return fmt.Errorf("count vectors: %w", err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM vec_documents_bin").Scan(&binCount); err != nil {
+		return fmt.Errorf("count binary vectors: %w", err)
+	}
+
+	if binCount != floatCount {
+		// Rebuild from scratch. We clear any partial rows and re-insert everything
+		// rather than filtering with NOT IN: a WHERE subquery on the vec0 source
+		// makes sqlite-vec mishandle the vector column type during INSERT...SELECT.
+		if binCount > 0 {
+			if _, err := db.Exec("DELETE FROM vec_documents_bin"); err != nil {
+				return fmt.Errorf("clear partial binary vectors: %w", err)
+			}
+		}
+		if floatCount > 0 {
+			slog.Info("backfilling binary-quantized vectors (one-time)", "count", floatCount)
+			if _, err := db.Exec(`
+				INSERT INTO vec_documents_bin(rowid, embedding, document_id)
+				SELECT rowid, vec_quantize_binary(embedding), document_id
+				FROM vec_documents
+			`); err != nil {
+				return fmt.Errorf("insert binary vectors: %w", err)
+			}
+			slog.Info("binary vector backfill complete", "count", floatCount)
+		}
+	}
+
+	if _, err := db.Exec(
+		"INSERT OR REPLACE INTO meta (key, value) VALUES (?, '1')",
+		binaryBackfillDoneKey,
+	); err != nil {
+		return fmt.Errorf("set backfill flag: %w", err)
+	}
+	return nil
+}
+
+// InsertEmbedding inserts an embedding for a document into both the float
+// vector table and its binary-quantized mirror, keeping their rowids aligned.
+// The binary mirror is used for fast candidate retrieval during search; the
+// float table holds the exact vectors used for reranking.
+func InsertEmbedding(conn *sql.DB, documentID int64, vecBytes []byte) error {
+	res, err := conn.Exec(
+		"INSERT INTO vec_documents (embedding, document_id) VALUES (?, ?)",
+		vecBytes, documentID,
+	)
+	if err != nil {
+		return fmt.Errorf("insert vec: %w", err)
+	}
+	rowid, err := res.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("vec rowid: %w", err)
+	}
+	if _, err := conn.Exec(
+		"INSERT INTO vec_documents_bin (rowid, embedding, document_id) VALUES (?, vec_quantize_binary(?), ?)",
+		rowid, vecBytes, documentID,
+	); err != nil {
+		return fmt.Errorf("insert binary vec: %w", err)
+	}
+	return nil
+}
+
+// DeleteEmbeddings removes embeddings for the given document IDs from both the
+// float vector table and its binary-quantized mirror.
+func DeleteEmbeddings(conn *sql.DB, documentIDs []any) error {
+	if len(documentIDs) == 0 {
+		return nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(documentIDs)), ",")
+	if _, err := conn.Exec(
+		"DELETE FROM vec_documents_bin WHERE document_id IN ("+placeholders+")", documentIDs...,
+	); err != nil {
+		return fmt.Errorf("delete binary vecs: %w", err)
+	}
+	if _, err := conn.Exec(
+		"DELETE FROM vec_documents WHERE document_id IN ("+placeholders+")", documentIDs...,
+	); err != nil {
+		return fmt.Errorf("delete vecs: %w", err)
+	}
 	return nil
 }
 

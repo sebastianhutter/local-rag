@@ -262,13 +262,11 @@ func deleteOldDocs(conn *sql.DB, sourceID int64) {
 	}
 
 	if len(ids) > 0 {
-		placeholders := strings.Repeat("?,", len(ids))
-		placeholders = placeholders[:len(placeholders)-1]
 		args := make([]any, len(ids))
 		for i, id := range ids {
 			args[i] = id
 		}
-		conn.Exec("DELETE FROM vec_documents WHERE document_id IN ("+placeholders+")", args...)
+		_ = db.DeleteEmbeddings(conn, args)
 	}
 	conn.Exec("DELETE FROM documents WHERE source_id = ?", sourceID)
 }
@@ -306,11 +304,8 @@ func insertChunks(conn *sql.DB, sourceID, collectionID int64, chunks []chunker.C
 		docID, _ := res.LastInsertId()
 
 		vecBytes := embeddings.SerializeFloat32(vecs[i])
-		if _, err := conn.Exec(
-			"INSERT INTO vec_documents (embedding, document_id) VALUES (?, ?)",
-			vecBytes, docID,
-		); err != nil {
-			return fmt.Errorf("insert vec: %w", err)
+		if err := db.InsertEmbedding(conn, docID, vecBytes); err != nil {
+			return err
 		}
 	}
 

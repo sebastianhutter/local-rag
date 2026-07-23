@@ -49,6 +49,11 @@ var searchCmd = &cobra.Command{
 		}
 		defer conn.Close()
 
+		// Ensures the binary-quantized mirror exists and is backfilled (one-time).
+		if err := db.InitSchema(conn, cfg.EmbeddingDimensions); err != nil {
+			return fmt.Errorf("init schema: %w", err)
+		}
+
 		queryEmbedding, err := embeddings.GetEmbedding(context.Background(), query, cfg.EmbeddingModel)
 		if err != nil {
 			return fmt.Errorf("failed to embed query (is Ollama running?): %w", err)

@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/sebastianhutter/local-rag-go/internal/config"
@@ -57,44 +59,136 @@ var collectionTypes = map[string]bool{
 	"code":    true,
 }
 
-// vectorSearch runs vector similarity search via sqlite-vec.
+// vectorCandidatePool returns how many binary-quantized candidates to retrieve
+// before reranking. Binary (Hamming) search is cheap, so we over-fetch a
+// generous pool and rerank it with exact float distances. When filters are
+// active we widen the pool further, since filtering happens after retrieval.
+func vectorCandidatePool(topK int, filters *Filters) int {
+	pool := topK * 20
+	if pool < 200 {
+		pool = 200
+	}
+	if filters.hasFilters() {
+		pool = topK * 100
+		if pool < 1000 {
+			pool = 1000
+		}
+	}
+	if pool > 4000 {
+		pool = 4000
+	}
+	return pool
+}
+
+// binaryCandidate is a candidate surfaced by the binary-quantized search,
+// carrying the vec_documents rowid used to fetch its exact float vector.
+type binaryCandidate struct {
+	rowid int64
+	docID int64
+}
+
+// vectorSearch runs approximate vector search over binary-quantized embeddings
+// (fast Hamming distance) to gather a candidate pool, then reranks that pool
+// using the exact float vectors (squared L2). This avoids a full-precision scan
+// over every stored vector on each query.
 func vectorSearch(db *sql.DB, queryEmbedding []float32, topK int, filters *Filters) ([]rankedResult, error) {
 	queryBlob := embeddings.SerializeFloat32(queryEmbedding)
+	pool := vectorCandidatePool(topK, filters)
 
-	candidateLimit := topK * 3
-	if filters.hasFilters() {
-		candidateLimit = topK * 50
-	}
-
+	// Stage 1: Hamming-distance KNN over the binary mirror.
 	rows, err := db.Query(
-		`SELECT document_id, distance
-		 FROM vec_documents
-		 WHERE embedding MATCH ?
-		 ORDER BY distance
-		 LIMIT ?`,
-		queryBlob, candidateLimit,
+		`SELECT rowid, document_id
+		 FROM vec_documents_bin
+		 WHERE embedding MATCH vec_quantize_binary(?) AND k = ?
+		 ORDER BY distance`,
+		queryBlob, pool,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("vector search: %w", err)
+		return nil, fmt.Errorf("binary vector search: %w", err)
 	}
 	defer rows.Close()
 
-	var results []rankedResult
+	var candidates []binaryCandidate
 	for rows.Next() {
-		var docID int64
-		var distance float64
-		if err := rows.Scan(&docID, &distance); err != nil {
-			return nil, fmt.Errorf("scan vector result: %w", err)
+		var c binaryCandidate
+		if err := rows.Scan(&c.rowid, &c.docID); err != nil {
+			return nil, fmt.Errorf("scan binary candidate: %w", err)
 		}
+		candidates = append(candidates, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
 
-		if !filters.hasFilters() || passesFilters(db, docID, filters) {
-			results = append(results, rankedResult{docID: docID, score: distance})
+	// Stage 2: fetch exact float vectors for the candidates by rowid (point
+	// lookups — no full scan) and rerank with squared L2 distance.
+	rowidList := make([]string, len(candidates))
+	docIDByRowid := make(map[int64]int64, len(candidates))
+	for i, c := range candidates {
+		rowidList[i] = strconv.FormatInt(c.rowid, 10)
+		docIDByRowid[c.rowid] = c.docID
+	}
+
+	fetchQuery := fmt.Sprintf(
+		"SELECT rowid, embedding FROM vec_documents WHERE rowid IN (%s)",
+		strings.Join(rowidList, ","),
+	)
+	frows, err := db.Query(fetchQuery)
+	if err != nil {
+		return nil, fmt.Errorf("fetch candidate vectors: %w", err)
+	}
+	defer frows.Close()
+
+	reranked := make([]rankedResult, 0, len(candidates))
+	for frows.Next() {
+		var rowid int64
+		var blob []byte
+		if err := frows.Scan(&rowid, &blob); err != nil {
+			return nil, fmt.Errorf("scan candidate vector: %w", err)
+		}
+		vec := embeddings.DeserializeFloat32(blob)
+		reranked = append(reranked, rankedResult{
+			docID: docIDByRowid[rowid],
+			score: squaredL2(queryEmbedding, vec),
+		})
+	}
+	if err := frows.Err(); err != nil {
+		return nil, err
+	}
+
+	sort.Slice(reranked, func(i, j int) bool {
+		return reranked[i].score < reranked[j].score
+	})
+
+	// Stage 3: apply filters and truncate to topK.
+	results := make([]rankedResult, 0, topK)
+	for _, r := range reranked {
+		if !filters.hasFilters() || passesFilters(db, r.docID, filters) {
+			results = append(results, r)
 			if len(results) >= topK {
 				break
 			}
 		}
 	}
-	return results, rows.Err()
+	return results, nil
+}
+
+// squaredL2 returns the squared Euclidean distance between two vectors. Squared
+// distance preserves ordering, so it is used directly for ranking. Mismatched
+// lengths yield +Inf so the pair sorts last rather than panicking.
+func squaredL2(a, b []float32) float64 {
+	if len(a) != len(b) {
+		return math.Inf(1)
+	}
+	var sum float64
+	for i := range a {
+		d := float64(a[i]) - float64(b[i])
+		sum += d * d
+	}
+	return sum
 }
 
 // escapeFTSQuery wraps each token in double quotes for safe FTS5 queries.

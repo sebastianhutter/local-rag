@@ -11,6 +11,7 @@ import (
 
 	"github.com/sebastianhutter/local-rag-go/internal/chunker"
 	"github.com/sebastianhutter/local-rag-go/internal/config"
+	"github.com/sebastianhutter/local-rag-go/internal/db"
 	"github.com/sebastianhutter/local-rag-go/internal/embeddings"
 	"github.com/sebastianhutter/local-rag-go/internal/parser"
 )
@@ -199,7 +200,7 @@ func indexSingleArticle(conn *sql.DB, cfg *config.Config, collectionID int64, ar
 		}
 		docID, _ := docRes.LastInsertId()
 		vecBytes := embeddings.SerializeFloat32(vecs[i])
-		conn.Exec("INSERT INTO vec_documents (embedding, document_id) VALUES (?, ?)", vecBytes, docID)
+		_ = db.InsertEmbedding(conn, docID, vecBytes)
 	}
 
 	return len(chunks), nil

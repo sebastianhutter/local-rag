@@ -74,8 +74,8 @@ func TestInitSchema(t *testing.T) {
 	if err := db.QueryRow("SELECT value FROM meta WHERE key='schema_version'").Scan(&version); err != nil {
 		t.Fatalf("schema_version: %v", err)
 	}
-	if version != "3" {
-		t.Errorf("schema_version = %q, want 3", version)
+	if version != "4" {
+		t.Errorf("schema_version = %q, want 4", version)
 	}
 }
 

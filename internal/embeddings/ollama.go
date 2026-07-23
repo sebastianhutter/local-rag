@@ -115,3 +115,13 @@ func SerializeFloat32(vec []float32) []byte {
 	}
 	return buf
 }
+
+// DeserializeFloat32 converts a packed sqlite-vec binary blob back into a
+// float32 vector. It is the inverse of SerializeFloat32.
+func DeserializeFloat32(buf []byte) []float32 {
+	vec := make([]float32, len(buf)/4)
+	for i := range vec {
+		vec[i] = math.Float32frombits(binary.LittleEndian.Uint32(buf[i*4:]))
+	}
+	return vec
+}
