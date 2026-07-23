@@ -72,7 +72,7 @@ These are built-in collection types with dedicated parsers and indexers:
 
 The entire database is a single SQLite file (`~/.local-rag/rag.db`). This avoids running any database server.
 
-- **sqlite-vec** adds vector similarity search via a virtual table (`vec_documents`). Embeddings are stored as packed float32 blobs and queried with `WHERE embedding MATCH ?` for nearest-neighbor search.
+- **sqlite-vec** adds vector similarity search via virtual tables. Exact float32 embeddings live in `vec_documents`; a binary-quantized mirror (`vec_documents_bin`, 1 bit/dim) enables a fast Hamming-distance candidate scan that is then reranked against the exact floats (see *Hybrid Search* below). A B-tree index on `documents(collection_id)` keeps per-collection aggregation fast.
 - **FTS5** (Full-Text Search 5) is SQLite's built-in full-text search engine. A virtual table (`documents_fts`) mirrors the documents table and supports keyword search with `MATCH`.
 - **Triggers** keep the FTS index in sync with the documents table automatically on insert, update, and delete.
 - **WAL mode** (Write-Ahead Logging) is enabled for better concurrent read/write performance during indexing.
@@ -90,7 +90,7 @@ Embeddings are generated locally using Ollama, which runs ML models on-device.
 
 Every search query runs two parallel searches:
 
-1. **Vector search** — the query is embedded and compared against stored embeddings by cosine distance via sqlite-vec.
+1. **Vector search** — the query is embedded, then matched in two stages: a fast Hamming-distance scan over the binary-quantized mirror (`vec_documents_bin`) gathers candidates, which are reranked by exact L2 distance using the float vectors in `vec_documents`.
 2. **Full-text search** — the query is tokenized and matched against the FTS5 index for exact keyword matches.
 
 Results from both lists are merged using RRF:
@@ -135,7 +135,9 @@ Parser (type-specific)
 Chunker
     |  Markdown: split on headings, preserve heading path as context prefix
     |  Email: single chunk if short, paragraph-split if long
-    |  Code: split on structural boundaries (functions, classes)
+    |  Code: AST split-then-merge (cAST) — small defs kept whole, large defs
+    |        split along child boundaries (class -> methods) with enclosing
+    |        symbol path, small siblings merged up to budget
     | Plain: fixed-size word windows (~500 words, 50 word overlap) |
     |--------------------------------------------------------------|
     v
@@ -145,7 +147,8 @@ Ollama embed (bge-m3, 1024d) --- batches of 32
 SQLite insert (within transaction)
     |  sources table: file path, SHA256 hash, mtime
     |  documents table: chunk text, title, metadata JSON
-    |  vec_documents: embedding vector
+    |  vec_documents: exact float embedding
+    |  vec_documents_bin: binary-quantized embedding (same rowid)
     |  documents_fts: auto-populated via trigger
 ```
 
@@ -154,7 +157,7 @@ SQLite insert (within transaction)
 ```shell
 Query string
     |
-    +---> Ollama embed ---> sqlite-vec MATCH (top-k by distance)
+    +---> Ollama embed ---> binary KNN (vec_documents_bin) -> rerank floats
     |                              |
     +---> FTS5 MATCH (top-k by rank)
                                    |
@@ -178,7 +181,8 @@ Five tables plus two virtual tables:
 | `collections`   | Namespaces for organizing content (system or project)                                 |
 | `sources`       | Individual files/emails that have been indexed, with SHA256 hash for change detection |
 | `documents`     | Chunked text content with metadata JSON                                               |
-| `vec_documents` | sqlite-vec virtual table storing embedding vectors                                    |
+| `vec_documents` | sqlite-vec virtual table storing exact float32 embedding vectors (used for reranking) |
+| `vec_documents_bin` | sqlite-vec virtual table storing binary-quantized embeddings (fast candidate scan) |
 | `documents_fts` | FTS5 virtual table mirroring documents for keyword search                             |
 | `meta`          | Schema version tracking for migrations                                                |
 
@@ -194,7 +198,7 @@ Relationships: `collections` 1:N `sources` 1:N `documents`. CASCADE deletes ensu
 | `.epub`                                                               | zip + XML chapter extraction                     | Per-chapter plain chunking        |
 | `.html` / `.htm`                                                      | golang.org/x/net/html text extraction            | Plain chunking                    |
 | `.txt` / `.csv` / `.json` / `.yaml` / `.yml`                          | Read as plaintext                                | Plain chunking                    |
-| `.py` / `.go` / `.tf` / `.ts` / `.js` / `.rs` / `.java` / `.c` / `.h` | go-tree-sitter structural parsing                | Function/class boundary splitting |
+| `.py` / `.go` / `.tf` / `.ts` / `.js` / `.rs` / `.java` / `.c` / `.h` | go-tree-sitter structural parsing                | AST split-then-merge (cAST): whole defs, large defs split into methods with enclosing symbol path |
 
 ## CLI Commands
 

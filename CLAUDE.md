@@ -86,6 +86,8 @@ flowchart LR
 
 **Hybrid search**: Every query runs both vector similarity search (semantic) and FTS5 full-text search (keyword). Results are merged using Reciprocal Rank Fusion (RRF). This ensures that both "what does this mean" and "find the exact phrase" queries work well.
 
+Vector search is two-stage for speed: a fast Hamming-distance KNN over binary-quantized vectors (`vec_documents_bin`) gathers a candidate pool, which is then reranked with the exact float vectors (`vec_documents`). This avoids a full-precision scan of every stored vector on each query. See `docs/hybrid-search-and-rrf.md`.
+
 **Incremental indexing**: Track file hashes, modification times, and watermarks. Only re-embed changed or new content. Use `--force` to re-index everything.
 
 ---
@@ -115,7 +117,7 @@ flowchart LR
 | PDF          | go-pdfium (WASM/Wazero)    | No CGO needed for PDF                  |
 | PDF OCR      | tesseract (optional)       | Fallback for scanned/image-only PDFs   |
 | DOCX         | archive/zip + encoding/xml | Word document extraction (.docx, .dotx)|
-| Code parsing | go-tree-sitter             | 13 languages with structural splitting |
+| Code parsing | go-tree-sitter             | 13 languages; AST split-then-merge (cAST) chunking |
 | CLI          | Cobra                      | Subcommands, flags, help               |
 | HTML cleanup | golang.org/x/net/html      | Strip tags from email/RSS              |
 
@@ -163,11 +165,24 @@ CREATE TABLE documents (
     UNIQUE(source_id, chunk_index)
 );
 
--- Vector index (sqlite-vec virtual table)
+-- Vector index (sqlite-vec virtual table) — exact float embeddings, used for reranking
 CREATE VIRTUAL TABLE vec_documents USING vec0(
     embedding float[1024],
     document_id INTEGER
 );
+
+-- Binary-quantized mirror of vec_documents (1 bit/dim, ~32x smaller). Shares each
+-- row's rowid with vec_documents so the exact float vector can be fetched by rowid.
+-- Vector search runs a fast Hamming-distance KNN here to gather candidates, then
+-- reranks them with the exact float vectors above. Kept in sync on insert/delete.
+CREATE VIRTUAL TABLE vec_documents_bin USING vec0(
+    embedding bit[1024],
+    document_id INTEGER
+);
+
+-- Speeds up per-collection COUNT/aggregation (collections list/info) and
+-- collection-scoped deletes; without it those queries full-scan documents.
+CREATE INDEX idx_documents_collection_id ON documents(collection_id);
 
 -- Full-text search index (FTS5)
 CREATE VIRTUAL TABLE documents_fts USING fts5(
@@ -244,9 +259,9 @@ local-rag search "query text"                     # Search all collections
 local-rag search "query" --collection obsidian    # Search specific collection
 local-rag search "query" --collection "Project A" # Search a project
 local-rag search "query" --type pdf               # Filter by source type
+local-rag search "query" --path infra/modules      # Filter by source path (substring of the file path)
+local-rag search "query" --collection code --path backend/services  # Scope to a subfolder/repo
 local-rag search "query" --from "sender@mail.com" # Filter by email sender
-local-rag search "query" --meta source=jira        # Filter by metadata field
-local-rag search "query" --meta source=confluence  # Jira/Confluence frontmatter
 local-rag search "query" --author "Author Name"   # Filter by book author
 local-rag search "query" --after 2025-01-01       # Filter by date
 local-rag search "query" --meta source=jira       # Filter by metadata field
@@ -274,6 +289,8 @@ local-rag serve --port 31123            # Start with HTTP/SSE transport
 
 # MCP tools support metadata_filter for arbitrary metadata filtering:
 # rag_search with metadata_filter: {"source": "jira"} filters by frontmatter fields
+# rag_search also accepts a "path" param: a case-insensitive substring of the
+# source path to scope results to a subfolder or repo (e.g. "backend/services")
 ```
 
 ---

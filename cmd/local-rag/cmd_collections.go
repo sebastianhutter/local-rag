@@ -188,7 +188,8 @@ var collectionsDeleteCmd = &cobra.Command{
 			}
 		}
 
-		// Delete vector entries first
+		// Delete vector entries first (both float and binary-quantized mirror).
+		conn.Exec(`DELETE FROM vec_documents_bin WHERE document_id IN (SELECT id FROM documents WHERE collection_id = ?)`, id)
 		conn.Exec(`DELETE FROM vec_documents WHERE document_id IN (SELECT id FROM documents WHERE collection_id = ?)`, id)
 		// CASCADE handles sources and documents
 		conn.Exec("DELETE FROM collections WHERE id = ?", id)

@@ -202,7 +202,7 @@ func indexCodeFile(conn *sql.DB, cfg *config.Config, repoPath, relPath string, c
 		return false, nil
 	}
 
-	doc := parser.ParseCodeFile(absPath, language, relPath)
+	doc := parser.ParseCodeFile(absPath, language, relPath, cfg.ChunkSizeTokens, cfg.ChunkOverlapTokens)
 	if doc == nil || len(doc.Blocks) == 0 {
 		return false, nil
 	}
@@ -252,15 +252,25 @@ func indexCodeFile(conn *sql.DB, cfg *config.Config, repoPath, relPath string, c
 }
 
 func codeBlocksToChunks(doc *parser.CodeDocument, relPath string, cfg *config.Config) []chunker.Chunk {
-	chunkSize := cfg.ChunkSizeTokens
-	overlap := cfg.ChunkOverlapTokens
+	// The parser has already produced size-bounded, AST-aligned blocks
+	// (see parser.ParseCodeFile), so each block maps to exactly one chunk.
+	// We prepend a compact context header and carry the enclosing symbol path
+	// so retrieval sees where a snippet lives (e.g. a method inside a class).
 	var chunks []chunker.Chunk
-	chunkIdx := 0
 
-	for _, block := range doc.Blocks {
+	for i, block := range doc.Blocks {
+		symbolDisplay := block.SymbolName
+		anon := block.SymbolName == "" || strings.HasPrefix(block.SymbolName, "(")
+		switch {
+		case block.SymbolPath != "" && anon:
+			symbolDisplay = block.SymbolPath
+		case block.SymbolPath != "":
+			symbolDisplay = block.SymbolPath + " > " + block.SymbolName
+		}
+
 		prefix := fmt.Sprintf("[%s:%d-%d] [%s] [%s: %s]\n",
 			relPath, block.StartLine, block.EndLine,
-			block.Language, block.SymbolType, block.SymbolName)
+			block.Language, block.SymbolType, symbolDisplay)
 
 		metadata := map[string]any{
 			"language":    block.Language,
@@ -270,35 +280,16 @@ func codeBlocksToChunks(doc *parser.CodeDocument, relPath string, cfg *config.Co
 			"end_line":    block.EndLine,
 			"file_path":   block.FilePath,
 		}
-
-		prefixedText := prefix + block.Text
-		prefixWC := chunker.WordCount(prefix)
-
-		if chunker.WordCount(prefixedText) <= chunkSize {
-			chunks = append(chunks, chunker.Chunk{
-				Text:       prefixedText,
-				Title:      relPath,
-				Metadata:   metadata,
-				ChunkIndex: chunkIdx,
-			})
-			chunkIdx++
-		} else {
-			available := chunkSize - prefixWC
-			if available < 50 {
-				available = 50
-			}
-			windows := chunker.SplitIntoWindows(block.Text, available, overlap)
-			for _, w := range windows {
-				meta := copyMeta(metadata)
-				chunks = append(chunks, chunker.Chunk{
-					Text:       prefix + w,
-					Title:      relPath,
-					Metadata:   meta,
-					ChunkIndex: chunkIdx,
-				})
-				chunkIdx++
-			}
+		if block.SymbolPath != "" {
+			metadata["symbol_path"] = block.SymbolPath
 		}
+
+		chunks = append(chunks, chunker.Chunk{
+			Text:       prefix + block.Text,
+			Title:      relPath,
+			Metadata:   metadata,
+			ChunkIndex: i,
+		})
 	}
 
 	return chunks

@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -65,7 +66,7 @@ x = 42
 `
 	os.WriteFile(path, []byte(source), 0644)
 
-	doc := ParseCodeFile(path, "python", "example.py")
+	doc := ParseCodeFile(path, "python", "example.py", 500, 50)
 	if doc == nil {
 		t.Fatal("ParseCodeFile returned nil")
 	}
@@ -115,7 +116,7 @@ type Config struct {
 `
 	os.WriteFile(path, []byte(source), 0644)
 
-	doc := ParseCodeFile(path, "go", "example.go")
+	doc := ParseCodeFile(path, "go", "example.go", 500, 50)
 	if doc == nil {
 		t.Fatal("ParseCodeFile returned nil")
 	}
@@ -152,7 +153,7 @@ variable "region" {
 `
 	os.WriteFile(path, []byte(source), 0644)
 
-	doc := ParseCodeFile(path, "hcl", "main.tf")
+	doc := ParseCodeFile(path, "hcl", "main.tf", 500, 50)
 	if doc == nil {
 		t.Fatal("ParseCodeFile returned nil")
 	}
@@ -184,7 +185,7 @@ func TestParseCodeFilePlaintext(t *testing.T) {
 	path := filepath.Join(dir, "data.txt")
 	os.WriteFile(path, []byte("some data\nmore data\n"), 0644)
 
-	doc := ParseCodeFile(path, "plaintext", "data.txt")
+	doc := ParseCodeFile(path, "plaintext", "data.txt", 500, 50)
 	if doc == nil {
 		t.Fatal("ParseCodeFile returned nil")
 	}
@@ -197,10 +198,100 @@ func TestParseCodeFilePlaintext(t *testing.T) {
 }
 
 func TestParseCodeFileNonexistent(t *testing.T) {
-	doc := ParseCodeFile("/nonexistent/file.py", "python", "file.py")
+	doc := ParseCodeFile("/nonexistent/file.py", "python", "file.py", 500, 50)
 	if doc != nil {
 		t.Error("expected nil for nonexistent file")
 	}
+}
+
+// TestParseCodeFileOversizedClassSplits verifies cAST behavior: a class larger
+// than the budget is split into per-method blocks that carry the class name as
+// their SymbolPath, instead of being word-window split across method boundaries.
+func TestParseCodeFileOversizedClassSplits(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "svc.py")
+
+	var sb strings.Builder
+	sb.WriteString("class OrderService:\n")
+	for _, name := range []string{"create", "cancel", "refund"} {
+		sb.WriteString("    def " + name + "(self, order):\n")
+		for i := 0; i < 4; i++ {
+			sb.WriteString("        x = compute(order)\n")
+		}
+		sb.WriteString("\n")
+	}
+	os.WriteFile(path, []byte(sb.String()), 0644)
+
+	// Budget fits a single method (~15 words) but not the whole class (~50),
+	// so the class splits along method boundaries.
+	doc := ParseCodeFile(path, "python", "svc.py", 30, 5)
+	if doc == nil {
+		t.Fatal("ParseCodeFile returned nil")
+	}
+
+	methods := map[string]bool{}
+	for _, b := range doc.Blocks {
+		if b.SymbolType == "function" && b.SymbolPath == "OrderService" {
+			methods[b.SymbolName] = true
+		}
+	}
+	for _, want := range []string{"create", "cancel", "refund"} {
+		if !methods[want] {
+			t.Errorf("expected method %q split out with SymbolPath 'OrderService'; blocks=%+v", want, blockSummaries(doc))
+		}
+	}
+}
+
+// TestParseCodeFileMergesSmallTrivia verifies that a run of small top-level
+// statements is merged into few module_top blocks rather than one per statement.
+func TestParseCodeFileMergesSmallTrivia(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "consts.py")
+
+	var sb strings.Builder
+	for i := 0; i < 20; i++ {
+		sb.WriteString("A" + string(rune('A'+i)) + " = " + "1\n")
+	}
+	os.WriteFile(path, []byte(sb.String()), 0644)
+
+	doc := ParseCodeFile(path, "python", "consts.py", 500, 50)
+	if doc == nil {
+		t.Fatal("ParseCodeFile returned nil")
+	}
+	// 20 tiny assignments (~60 words) fit one budget → a single merged block.
+	if len(doc.Blocks) != 1 {
+		t.Errorf("expected small trivia merged into 1 block, got %d", len(doc.Blocks))
+	}
+	if doc.Blocks[0].SymbolType != "module_top" {
+		t.Errorf("expected module_top, got %q", doc.Blocks[0].SymbolType)
+	}
+}
+
+// TestParseCodeFilePlaintextSplits verifies large plaintext is split by budget.
+func TestParseCodeFilePlaintextSplits(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.txt")
+	var sb strings.Builder
+	for i := 0; i < 300; i++ {
+		sb.WriteString("word ")
+	}
+	os.WriteFile(path, []byte(sb.String()), 0644)
+
+	doc := ParseCodeFile(path, "plaintext", "big.txt", 100, 10)
+	if doc == nil {
+		t.Fatal("ParseCodeFile returned nil")
+	}
+	if len(doc.Blocks) < 2 {
+		t.Errorf("expected large plaintext split into multiple blocks, got %d", len(doc.Blocks))
+	}
+}
+
+func blockSummaries(doc *CodeDocument) []string {
+	var out []string
+	for _, b := range doc.Blocks {
+		out = append(out, b.SymbolType+":"+b.SymbolPath+"/"+b.SymbolName)
+	}
+	return out
 }
 
 func TestNodeSymbolType(t *testing.T) {

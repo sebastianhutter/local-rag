@@ -14,17 +14,17 @@ import (
 	"github.com/smacker/go-tree-sitter/csharp"
 	"github.com/smacker/go-tree-sitter/css"
 	"github.com/smacker/go-tree-sitter/dockerfile"
+	tsgo "github.com/smacker/go-tree-sitter/golang"
+	tshcl "github.com/smacker/go-tree-sitter/hcl"
 	tshtml "github.com/smacker/go-tree-sitter/html"
 	"github.com/smacker/go-tree-sitter/java"
 	"github.com/smacker/go-tree-sitter/javascript"
+	tsmarkdown "github.com/smacker/go-tree-sitter/markdown/tree-sitter-markdown"
 	"github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/ruby"
 	"github.com/smacker/go-tree-sitter/rust"
 	"github.com/smacker/go-tree-sitter/sql"
 	"github.com/smacker/go-tree-sitter/toml"
-	tsgo "github.com/smacker/go-tree-sitter/golang"
-	tshcl "github.com/smacker/go-tree-sitter/hcl"
-	tsmarkdown "github.com/smacker/go-tree-sitter/markdown/tree-sitter-markdown"
 	"github.com/smacker/go-tree-sitter/typescript/tsx"
 	tsts "github.com/smacker/go-tree-sitter/typescript/typescript"
 	"github.com/smacker/go-tree-sitter/yaml"
@@ -36,6 +36,7 @@ type CodeBlock struct {
 	Language   string
 	SymbolName string
 	SymbolType string // "function", "class", "method", "block", "module_top"
+	SymbolPath string // enclosing symbol chain, e.g. "OrderService" for a method
 	StartLine  int    // 1-based
 	EndLine    int    // 1-based
 	FilePath   string // relative path within repo
@@ -97,16 +98,16 @@ var splitNodeTypes = map[string]map[string]bool{
 	"python":     {"function_definition": true, "class_definition": true, "decorated_definition": true},
 	"go":         {"function_declaration": true, "method_declaration": true, "type_declaration": true},
 	"hcl":        {"block": true},
-	"typescript":  {"function_declaration": true, "class_declaration": true, "export_statement": true, "interface_declaration": true, "type_alias_declaration": true, "enum_declaration": true},
-	"tsx":         {"function_declaration": true, "class_declaration": true, "export_statement": true, "interface_declaration": true, "type_alias_declaration": true, "enum_declaration": true},
-	"javascript":  {"function_declaration": true, "class_declaration": true, "export_statement": true},
-	"rust":        {"function_item": true, "struct_item": true, "enum_item": true, "impl_item": true, "trait_item": true, "mod_item": true},
-	"java":        {"class_declaration": true, "interface_declaration": true, "enum_declaration": true, "method_declaration": true},
-	"c":           {"function_definition": true, "struct_specifier": true, "enum_specifier": true},
-	"cpp":         {"function_definition": true, "class_specifier": true, "struct_specifier": true, "enum_specifier": true},
-	"csharp":      {"class_declaration": true, "interface_declaration": true, "method_declaration": true, "enum_declaration": true},
-	"ruby":        {"method": true, "class": true, "module": true},
-	"bash":        {"function_definition": true},
+	"typescript": {"function_declaration": true, "class_declaration": true, "export_statement": true, "interface_declaration": true, "type_alias_declaration": true, "enum_declaration": true},
+	"tsx":        {"function_declaration": true, "class_declaration": true, "export_statement": true, "interface_declaration": true, "type_alias_declaration": true, "enum_declaration": true},
+	"javascript": {"function_declaration": true, "class_declaration": true, "export_statement": true},
+	"rust":       {"function_item": true, "struct_item": true, "enum_item": true, "impl_item": true, "trait_item": true, "mod_item": true},
+	"java":       {"class_declaration": true, "interface_declaration": true, "enum_declaration": true, "method_declaration": true},
+	"c":          {"function_definition": true, "struct_specifier": true, "enum_specifier": true},
+	"cpp":        {"function_definition": true, "class_specifier": true, "struct_specifier": true, "enum_specifier": true},
+	"csharp":     {"class_declaration": true, "interface_declaration": true, "method_declaration": true, "enum_declaration": true},
+	"ruby":       {"method": true, "class": true, "module": true},
+	"bash":       {"function_definition": true},
 }
 
 // languageMap maps language names to tree-sitter Language objects.
@@ -163,8 +164,20 @@ func GetCodeLanguage(path string) string {
 	return CodeExtensionMap[ext]
 }
 
-// ParseCodeFile parses a source code file into structural blocks using tree-sitter.
-func ParseCodeFile(filePath, language, relativePath string) *CodeDocument {
+// ParseCodeFile parses a source code file into structural, size-bounded blocks
+// using tree-sitter. It follows the "cAST" split-then-merge strategy
+// (arXiv:2506.15655): a named definition that fits maxWords becomes one block;
+// an oversized definition is split recursively along its AST child boundaries
+// (e.g. a large class → one block per method, each carrying the enclosing
+// symbol path); runs of small adjacent trivia (imports, top-level statements)
+// are greedily merged up to maxWords. Word-window splitting is only a last
+// resort for oversized leaves that have no further structure.
+//
+// maxWords is the per-block size budget (whitespace-delimited words, matching
+// the project-wide token proxy); overlap is the word overlap used by the
+// last-resort window splitter. cAST measures budget in non-whitespace
+// characters, but we use words for consistency with the other chunkers.
+func ParseCodeFile(filePath, language, relativePath string, maxWords, overlap int) *CodeDocument {
 	sourceBytes, err := os.ReadFile(filePath)
 	if err != nil {
 		slog.Error("cannot read file", "path", filePath, "err", err)
@@ -173,13 +186,13 @@ func ParseCodeFile(filePath, language, relativePath string) *CodeDocument {
 
 	// Plaintext files have no tree-sitter grammar.
 	if language == "plaintext" {
-		return plainTextDoc(sourceBytes, language, relativePath)
+		return plainTextDoc(sourceBytes, language, relativePath, maxWords, overlap)
 	}
 
 	lang, ok := languageMap[language]
 	if !ok {
 		slog.Warn("unsupported tree-sitter language, treating as plaintext", "language", language)
-		return plainTextDoc(sourceBytes, language, relativePath)
+		return plainTextDoc(sourceBytes, language, relativePath, maxWords, overlap)
 	}
 
 	parser := sitter.NewParser()
@@ -202,95 +215,234 @@ func ParseCodeFile(filePath, language, relativePath string) *CodeDocument {
 		children = collectChildren(children[0])
 	}
 
-	// Accumulate non-split nodes into module_top blocks.
-	var topLines []string
-	topStartLine := -1
-	topEndLine := -1
-
-	flushTopLevel := func() {
-		if len(topLines) > 0 && topStartLine >= 0 {
-			text := strings.Join(topLines, "\n")
-			if strings.TrimSpace(text) != "" {
-				doc.Blocks = append(doc.Blocks, CodeBlock{
-					Text:       text,
-					Language:   language,
-					SymbolName: "(top-level)",
-					SymbolType: "module_top",
-					StartLine:  topStartLine,
-					EndLine:    topEndLine,
-					FilePath:   relativePath,
-				})
-			}
-		}
-		topLines = nil
-		topStartLine = -1
-		topEndLine = -1
+	ctx := &chunkCtx{
+		src:      sourceBytes,
+		language: language,
+		relPath:  relativePath,
+		splits:   splits,
+		maxWords: maxWords,
+		overlap:  overlap,
 	}
+	doc.Blocks = ctx.chunkNodes(children, "", true)
 
-	for _, child := range children {
-		nodeType := child.Type()
-		if splits[nodeType] {
-			flushTopLevel()
-
-			nodeText := child.Content(sourceBytes)
-			startLine := int(child.StartPoint().Row) + 1
-			endLine := int(child.EndPoint().Row) + 1
-
-			symbolName := extractSymbolName(child, language, sourceBytes)
-			symbolType := nodeSymbolType(nodeType)
-
-			// For decorated definitions, refine based on inner node.
-			if symbolType == "decorated" && language == "python" {
-				for i := 0; i < int(child.ChildCount()); i++ {
-					inner := child.Child(i)
-					if inner.Type() == "class_definition" {
-						symbolType = "class"
-						break
-					} else if inner.Type() == "function_definition" {
-						symbolType = "function"
-						break
-					}
-				}
-			}
-
-			doc.Blocks = append(doc.Blocks, CodeBlock{
-				Text:       nodeText,
-				Language:   language,
-				SymbolName: symbolName,
-				SymbolType: symbolType,
-				StartLine:  startLine,
-				EndLine:    endLine,
-				FilePath:   relativePath,
-			})
-		} else {
-			nodeText := child.Content(sourceBytes)
-			startLine := int(child.StartPoint().Row) + 1
-			endLine := int(child.EndPoint().Row) + 1
-			if topStartLine < 0 {
-				topStartLine = startLine
-			}
-			topEndLine = endLine
-			topLines = append(topLines, nodeText)
-		}
-	}
-
-	flushTopLevel()
-
-	// If no structural blocks found, treat entire file as one block.
+	// If no structural blocks found, treat entire file as plaintext.
 	if len(doc.Blocks) == 0 {
-		return plainTextDoc(sourceBytes, language, relativePath)
+		return plainTextDoc(sourceBytes, language, relativePath, maxWords, overlap)
 	}
 
 	return doc
 }
 
-func plainTextDoc(sourceBytes []byte, language, relativePath string) *CodeDocument {
-	fullText := string(sourceBytes)
+// chunkCtx holds the invariants for a single file's recursive chunking.
+type chunkCtx struct {
+	src      []byte
+	language string
+	relPath  string
+	splits   map[string]bool
+	maxWords int
+	overlap  int
+}
+
+// chunkNodes converts a sequence of sibling AST nodes into size-bounded blocks.
+// parentPath is the enclosing symbol chain (empty at file scope). topLevel marks
+// file-scope trivia as "module_top" (vs "block" when nested inside a definition).
+func (c *chunkCtx) chunkNodes(nodes []*sitter.Node, parentPath string, topLevel bool) []CodeBlock {
+	triviaType, triviaName := "block", "(block)"
+	if topLevel {
+		triviaType, triviaName = "module_top", "(top-level)"
+	}
+
+	var blocks []CodeBlock
+	var buf []*sitter.Node
+	bufWords := 0
+
+	flush := func() {
+		if len(buf) == 0 {
+			return
+		}
+		if blk, ok := c.spanBlock(buf, parentPath, triviaName, triviaType); ok {
+			blocks = append(blocks, blk)
+		}
+		buf = nil
+		bufWords = 0
+	}
+
+	for _, node := range nodes {
+		text := node.Content(c.src)
+		w := wordCount(text)
+
+		switch {
+		case c.splits[node.Type()]:
+			flush()
+			if w <= c.maxWords {
+				blocks = append(blocks, c.namedBlock(node, parentPath))
+			} else {
+				// Oversized definition: recurse into its children so the split
+				// falls on method/statement boundaries, carrying the def name
+				// into the enclosing path.
+				name := extractSymbolName(node, c.language, c.src)
+				sub := c.chunkNodes(collectChildren(node), joinPath(parentPath, name), false)
+				if len(sub) == 0 {
+					sub = c.windowBlocks(node, parentPath, name, c.refinedType(node), c.maxWords)
+				}
+				blocks = append(blocks, sub...)
+			}
+
+		case w > c.maxWords:
+			// Oversized trivia (e.g. a huge top-level statement or data literal):
+			// recurse into its children, or window-split if it is a leaf.
+			flush()
+			grand := collectChildren(node)
+			if len(grand) > 1 {
+				blocks = append(blocks, c.chunkNodes(grand, parentPath, topLevel)...)
+			} else {
+				blocks = append(blocks, c.windowBlocks(node, parentPath, triviaName, triviaType, c.maxWords)...)
+			}
+
+		default:
+			// Small trivia: greedily merge with adjacent siblings up to budget.
+			if bufWords+w > c.maxWords {
+				flush()
+			}
+			buf = append(buf, node)
+			bufWords += w
+		}
+	}
+	flush()
+	return blocks
+}
+
+// namedBlock builds a block for a definition node that fits the budget.
+func (c *chunkCtx) namedBlock(node *sitter.Node, parentPath string) CodeBlock {
+	return CodeBlock{
+		Text:       node.Content(c.src),
+		Language:   c.language,
+		SymbolName: extractSymbolName(node, c.language, c.src),
+		SymbolType: c.refinedType(node),
+		SymbolPath: parentPath,
+		StartLine:  int(node.StartPoint().Row) + 1,
+		EndLine:    int(node.EndPoint().Row) + 1,
+		FilePath:   c.relPath,
+	}
+}
+
+// refinedType maps a node type to a symbol type, refining Python decorated
+// definitions to the underlying class/function.
+func (c *chunkCtx) refinedType(node *sitter.Node) string {
+	symbolType := nodeSymbolType(node.Type())
+	if symbolType == "decorated" && c.language == "python" {
+		for i := 0; i < int(node.ChildCount()); i++ {
+			switch node.Child(i).Type() {
+			case "class_definition":
+				return "class"
+			case "function_definition":
+				return "function"
+			}
+		}
+	}
+	return symbolType
+}
+
+// spanBlock builds a single block from a contiguous run of nodes, using the
+// exact source span so original formatting is preserved. Returns ok=false if
+// the span is blank.
+func (c *chunkCtx) spanBlock(nodes []*sitter.Node, parentPath, name, symbolType string) (CodeBlock, bool) {
+	first, last := nodes[0], nodes[len(nodes)-1]
+	text := string(c.src[first.StartByte():last.EndByte()])
+	if strings.TrimSpace(text) == "" {
+		return CodeBlock{}, false
+	}
+	return CodeBlock{
+		Text:       text,
+		Language:   c.language,
+		SymbolName: name,
+		SymbolType: symbolType,
+		SymbolPath: parentPath,
+		StartLine:  int(first.StartPoint().Row) + 1,
+		EndLine:    int(last.EndPoint().Row) + 1,
+		FilePath:   c.relPath,
+	}, true
+}
+
+// windowBlocks is the last-resort splitter for an oversized leaf node with no
+// further structure. It splits the node's text into overlapping word windows.
+func (c *chunkCtx) windowBlocks(node *sitter.Node, parentPath, name, symbolType string, maxWords int) []CodeBlock {
+	startLine := int(node.StartPoint().Row) + 1
+	windows := splitWords(node.Content(c.src), maxWords, c.overlap)
+	blocks := make([]CodeBlock, 0, len(windows))
+	for _, w := range windows {
+		if strings.TrimSpace(w) == "" {
+			continue
+		}
+		blocks = append(blocks, CodeBlock{
+			Text:       w,
+			Language:   c.language,
+			SymbolName: name,
+			SymbolType: symbolType,
+			SymbolPath: parentPath,
+			StartLine:  startLine,
+			EndLine:    int(node.EndPoint().Row) + 1,
+			FilePath:   c.relPath,
+		})
+	}
+	return blocks
+}
+
+// joinPath appends a symbol name to an enclosing path.
+func joinPath(parent, name string) string {
+	if parent == "" {
+		return name
+	}
+	return parent + " > " + name
+}
+
+// wordCount estimates token count by whitespace splitting.
+func wordCount(text string) int {
+	return len(strings.Fields(text))
+}
+
+// splitWords splits text into overlapping word windows of at most size words.
+func splitWords(text string, size, overlap int) []string {
+	if size < 1 {
+		size = 1
+	}
+	if overlap < 0 || overlap >= size {
+		overlap = 0
+	}
+	words := strings.Fields(text)
+	if len(words) <= size {
+		return []string{text}
+	}
+	var out []string
+	for start := 0; start < len(words); {
+		end := start + size
+		if end > len(words) {
+			end = len(words)
+		}
+		out = append(out, strings.Join(words[start:end], " "))
+		if end >= len(words) {
+			break
+		}
+		start = end - overlap
+	}
+	return out
+}
+
+// plainTextDoc splits a non-parsed file into size-bounded module_top blocks.
+func plainTextDoc(sourceBytes []byte, language, relativePath string, maxWords, overlap int) *CodeDocument {
 	doc := &CodeDocument{FilePath: relativePath, Language: language}
-	if strings.TrimSpace(fullText) != "" {
-		lineCount := strings.Count(fullText, "\n") + 1
+	fullText := string(sourceBytes)
+	if strings.TrimSpace(fullText) == "" {
+		return doc
+	}
+	lineCount := strings.Count(fullText, "\n") + 1
+	windows := splitWords(fullText, maxWords, overlap)
+	for _, w := range windows {
+		if strings.TrimSpace(w) == "" {
+			continue
+		}
 		doc.Blocks = append(doc.Blocks, CodeBlock{
-			Text:       fullText,
+			Text:       w,
 			Language:   language,
 			SymbolName: "(file)",
 			SymbolType: "module_top",

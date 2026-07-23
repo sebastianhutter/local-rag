@@ -31,6 +31,7 @@ type SearchResult struct {
 type Filters struct {
 	Collection      string
 	SourceType      string
+	Path            string // case-insensitive substring match on the source path
 	DateFrom        string
 	DateTo          string
 	Sender          string
@@ -42,7 +43,7 @@ func (f *Filters) hasFilters() bool {
 	if f == nil {
 		return false
 	}
-	return f.Collection != "" || f.SourceType != "" || f.Sender != "" ||
+	return f.Collection != "" || f.SourceType != "" || f.Path != "" || f.Sender != "" ||
 		f.Author != "" || f.DateFrom != "" || f.DateTo != "" ||
 		len(f.MetadataFilters) > 0
 }
@@ -280,6 +281,10 @@ func passesFilters(db *sql.DB, documentID int64, filters *Filters) bool {
 	}
 
 	if filters.SourceType != "" && sourceType != filters.SourceType {
+		return false
+	}
+
+	if filters.Path != "" && !strings.Contains(strings.ToLower(sourcePath), strings.ToLower(filters.Path)) {
 		return false
 	}
 

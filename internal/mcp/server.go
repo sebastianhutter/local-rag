@@ -64,6 +64,9 @@ var ragSearchTool = mcp.NewTool("rag_search",
 	mcp.WithString("source_type",
 		mcp.Description("Filter by type: 'markdown', 'pdf', 'docx', 'epub', 'html', 'txt', 'email', 'code', 'commit', 'rss'. "+
 			"Markdown documents may include frontmatter-derived metadata (e.g. source, issue_key, url for Jira/Confluence docs).")),
+	mcp.WithString("path",
+		mcp.Description("Filter by source path (case-insensitive substring of the absolute file path). "+
+			"Use to scope to a subfolder or repo, e.g. 'backend/services' or 'infrastructure/modules'.")),
 	mcp.WithString("date_from",
 		mcp.Description("Results after this date (YYYY-MM-DD)")),
 	mcp.WithString("date_to",

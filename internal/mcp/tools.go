@@ -61,6 +61,7 @@ func handleRagSearch(ctx context.Context, request mcp.CallToolRequest) (*mcp.Cal
 	filters := &search.Filters{
 		Collection:      request.GetString("collection", ""),
 		SourceType:      request.GetString("source_type", ""),
+		Path:            request.GetString("path", ""),
 		DateFrom:        request.GetString("date_from", ""),
 		DateTo:          request.GetString("date_to", ""),
 		Sender:          request.GetString("sender", ""),
@@ -191,10 +192,10 @@ func handleRagIndex(ctx context.Context, request mcp.CallToolRequest) (*mcp.Call
 	}
 
 	output := map[string]any{
-		"collection": collection,
-		"indexed":    result.Indexed,
-		"skipped":    result.Skipped,
-		"errors":     result.Errors,
+		"collection":  collection,
+		"indexed":     result.Indexed,
+		"skipped":     result.Skipped,
+		"errors":      result.Errors,
 		"total_found": result.TotalFound,
 	}
 	data, _ := json.MarshalIndent(output, "", "  ")

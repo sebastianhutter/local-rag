@@ -10,7 +10,7 @@ A fully local, privacy-preserving RAG (Retrieval Augmented Generation) system fo
 | **eM Client**    | system          | Emails — subject, body, sender, recipients, date, folder                         |
 | **Calibre**      | system          | Ebook metadata + content — EPUB/PDF with author, tags, series                    |
 | **NetNewsWire**  | system          | RSS articles — title, author, content, feed name                                 |
-| **Code Repos**   | code            | Git repos — paths can be direct repos or parent dirs (auto-discovered recursively). Tree-sitter structural parsing + commit history |
+| **Code Repos**   | code            | Git repos — paths can be direct repos or parent dirs (auto-discovered recursively). Tree-sitter AST split-then-merge (cAST) chunking + commit history |
 | **Project Docs** | project         | Any folder of documents dispatched to the correct parser by extension            |
 
 ## Installation
@@ -79,6 +79,7 @@ local-rag index all                        # everything at once
 local-rag search "kubernetes deployment strategy"
 local-rag search "invoice from supplier" --collection email
 local-rag search "API specification" --type pdf --top 20
+local-rag search "s3 bucket policy" --collection code --path infrastructure/modules
 ```
 
 ## GUI
@@ -98,7 +99,7 @@ Launch `local-rag` with no arguments (or `local-rag gui`) to start the menu bar 
 
 local-rag exposes 5 MCP tools: `rag_search`, `rag_list_collections`, `rag_collection_info`, `rag_index`, and `rag_prune`.
 
-The `rag_search` tool supports a `metadata_filter` parameter — a JSON object of key-value pairs for filtering by arbitrary metadata fields (e.g. `{"source": "jira", "issue_key": "CB-123"}`).
+The `rag_search` tool supports a `metadata_filter` parameter — a JSON object of key-value pairs for filtering by arbitrary metadata fields (e.g. `{"source": "jira", "issue_key": "CB-123"}`) — and a `path` parameter to scope results to a subfolder or repo by a case-insensitive substring of the source path (e.g. `"infrastructure/modules"`).
 
 ### GUI Mode (SSE)
 
@@ -169,6 +170,7 @@ local-rag search QUERY [flags]
 Flags:
   -c, --collection STRING   Filter by collection name
       --type STRING         Filter by source type (markdown, pdf, email, code, ...)
+      --path STRING         Filter by source path (case-insensitive substring, e.g. a subfolder or repo)
       --from STRING         Filter by email sender
       --author STRING       Filter by book author
       --after YYYY-MM-DD    Only results after this date
@@ -258,7 +260,7 @@ Config file: `~/.local-rag/config.json`
 | PDF          | go-pdfium (WASM/Wazero)    | No CGO needed for PDF                  |
 | PDF OCR      | tesseract (optional)       | Fallback for scanned/image-only PDFs   |
 | DOCX         | archive/zip + encoding/xml | Word document extraction (.docx, .dotx)|
-| Code parsing | go-tree-sitter             | 13 languages with structural splitting |
+| Code parsing | go-tree-sitter             | 13 languages; AST split-then-merge (cAST) chunking |
 | CLI          | Cobra                      | Subcommands, flags, help               |
 | HTML cleanup | golang.org/x/net/html      | Strip tags from email/RSS              |
 

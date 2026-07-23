@@ -31,9 +31,17 @@ cp -R "$APP_DIR" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
 
 # ── Create DMG ──────────────────────────────────────────────────────────────
+# Size the intermediate image to the staged content plus generous headroom.
+# hdiutil's automatic sizing can under-provision the scratch volume and fail
+# with "No space left on device" while copying the app in. The final UDZO image
+# is compressed, so over-allocating the read/write intermediate costs nothing.
+STAGING_MB=$(du -sm "$STAGING" | cut -f1)
+SIZE_MB=$(( STAGING_MB + 100 ))
+
 hdiutil create \
     -volname "$VOLUME_NAME" \
     -srcfolder "$STAGING" \
+    -size "${SIZE_MB}m" \
     -ov \
     -format UDZO \
     "$DMG_PATH"

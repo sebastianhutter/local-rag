@@ -18,6 +18,7 @@ import (
 var (
 	searchCollection string
 	searchType       string
+	searchPath       string
 	searchFrom       string
 	searchAuthor     string
 	searchAfter      string
@@ -71,6 +72,7 @@ var searchCmd = &cobra.Command{
 		filters := &search.Filters{
 			Collection:      searchCollection,
 			SourceType:      searchType,
+			Path:            searchPath,
 			Sender:          searchFrom,
 			Author:          searchAuthor,
 			DateFrom:        searchAfter,
@@ -113,6 +115,7 @@ var searchCmd = &cobra.Command{
 func init() {
 	searchCmd.Flags().StringVarP(&searchCollection, "collection", "c", "", "Search within a specific collection")
 	searchCmd.Flags().StringVar(&searchType, "type", "", "Filter by source type")
+	searchCmd.Flags().StringVar(&searchPath, "path", "", "Filter by source path (case-insensitive substring, e.g. a subfolder or repo)")
 	searchCmd.Flags().StringVar(&searchFrom, "from", "", "Filter by email sender")
 	searchCmd.Flags().StringVar(&searchAuthor, "author", "", "Filter by book author")
 	searchCmd.Flags().StringVar(&searchAfter, "after", "", "Only results after this date (YYYY-MM-DD)")

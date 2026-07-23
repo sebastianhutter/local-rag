@@ -20,7 +20,12 @@ When you search for "kubernetes deployment strategy", two things happen in paral
 
 Your query text is sent to Ollama, which runs the bge-m3 model locally to produce a 1024-dimensional vector — a list of 1024 floating-point numbers that encode the meaning of your query.
 
-This vector is then compared against all stored document vectors using sqlite-vec, a SQLite extension for nearest-neighbor search. sqlite-vec returns the closest documents ranked by cosine distance (lower distance = more similar meaning).
+This vector is then matched against the stored document vectors using sqlite-vec, a SQLite extension for nearest-neighbor search, in **two stages** for speed:
+
+1. **Candidate retrieval (binary quantized).** The query vector is binary-quantized (each dimension → 1 bit by sign) and compared against `vec_documents_bin` using Hamming distance. These bit vectors are ~32× smaller than the floats, so this scan is fast and stays in memory even for large corpora. It yields an over-fetched candidate pool.
+2. **Rerank (exact floats).** The exact float vectors for those candidates are fetched by rowid from `vec_documents` and scored by squared L2 distance (lower = more similar). The reranked top results are what feed into fusion.
+
+This two-stage design avoids a full-precision distance computation over *every* stored vector on each query — the slow part when the corpus grows to hundreds of thousands of chunks. Both tables are kept in sync when documents are inserted or deleted.
 
 The result is a ranked list like:
 
@@ -127,9 +132,9 @@ These values are configurable in `~/.local-rag/config.json`:
 
 The search pipeline lives in `internal/search/`:
 
-- `VectorSearch()` — runs the sqlite-vec nearest-neighbor query
-- `FTSSearch()` — runs the FTS5 keyword query
+- `vectorSearch()` — two-stage: binary-quantized Hamming KNN over `vec_documents_bin`, then rerank the candidates by exact L2 distance using the float vectors in `vec_documents`
+- `ftsSearch()` — runs the FTS5 keyword query
 - `RRFMerge()` — combines both ranked lists using the formula above
 - `Search()` — orchestrates the full pipeline: run both searches, merge, apply filters, fetch full document data
 
-All filtering (by collection, source type, date range, sender) happens after the initial search but before the final ranking, so filters don't interfere with the ranking logic itself.
+All filtering (by collection, source type, path substring, date range, sender, author, and arbitrary metadata) happens after the initial search but before the final ranking, so filters don't interfere with the ranking logic itself.
