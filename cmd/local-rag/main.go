@@ -17,8 +17,8 @@ var (
 
 var rootCmd = &cobra.Command{
 	Version: version,
-	Use:   "local-rag",
-	Short: "Local RAG — privacy-preserving retrieval augmented generation",
+	Use:     "local-rag",
+	Short:   "Local RAG — privacy-preserving retrieval augmented generation",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return gui.Run()
 	},

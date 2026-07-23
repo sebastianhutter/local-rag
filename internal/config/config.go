@@ -26,20 +26,20 @@ type SearchDefaults struct {
 
 // OCRConfig holds settings for optional tesseract-based OCR fallback on scanned PDFs.
 type OCRConfig struct {
-	Enabled       bool     `json:"enabled"`           // default: false
-	Languages     []string `json:"languages"`         // default: ["eng"], joined as "eng+deu" for tesseract
-	MaxPages      int      `json:"max_pages"`         // default: 50, skip OCR if PDF exceeds this
-	MaxFileSizeMB int      `json:"max_file_size_mb"`  // default: 100, skip OCR if file exceeds this
-	MinWordCount  int      `json:"min_word_count"`    // default: 10, OCR pages with fewer words than this
+	Enabled       bool     `json:"enabled"`          // default: false
+	Languages     []string `json:"languages"`        // default: ["eng"], joined as "eng+deu" for tesseract
+	MaxPages      int      `json:"max_pages"`        // default: 50, skip OCR if PDF exceeds this
+	MaxFileSizeMB int      `json:"max_file_size_mb"` // default: 100, skip OCR if file exceeds this
+	MinWordCount  int      `json:"min_word_count"`   // default: 10, OCR pages with fewer words than this
 }
 
 // GUIConfig holds GUI-specific settings.
 type GUIConfig struct {
-	AutoStartMCP             bool `json:"auto_start_mcp"`
-	MCPPort                  int  `json:"mcp_port"`
-	AutoReindex              bool `json:"auto_reindex"`
+	AutoStartMCP               bool `json:"auto_start_mcp"`
+	MCPPort                    int  `json:"mcp_port"`
+	AutoReindex                bool `json:"auto_reindex"`
 	AutoReindexIntervalMinutes int  `json:"auto_reindex_interval_minutes"`
-	StartOnLogin             bool `json:"start_on_login"`
+	StartOnLogin               bool `json:"start_on_login"`
 }
 
 // Config holds all application configuration.
@@ -47,6 +47,7 @@ type Config struct {
 	DBPath                    string              `json:"db_path"`
 	EmbeddingModel            string              `json:"embedding_model"`
 	EmbeddingDimensions       int                 `json:"embedding_dimensions"`
+	EmbeddingHosts            []string            `json:"embedding_hosts"`
 	ChunkSizeTokens           int                 `json:"chunk_size_tokens"`
 	ChunkOverlapTokens        int                 `json:"chunk_overlap_tokens"`
 	ObsidianVaults            []string            `json:"obsidian_vaults"`
@@ -54,8 +55,8 @@ type Config struct {
 	EmclientDBPath            string              `json:"emclient_db_path"`
 	CalibreLibraries          []string            `json:"calibre_libraries"`
 	NetnewswireDBPath         string              `json:"netnewswire_db_path"`
-	Repositories              map[string][]string  `json:"repositories"`
-	Projects                  map[string][]string  `json:"projects"`
+	Repositories              map[string][]string `json:"repositories"`
+	Projects                  map[string][]string `json:"projects"`
 	DisabledCollections       []string            `json:"disabled_collections"`
 	GitHistoryInMonths        int                 `json:"git_history_in_months"`
 	GitCommitSubjectBlacklist []string            `json:"git_commit_subject_blacklist"`
@@ -188,6 +189,7 @@ func Save(cfg *Config, path string) error {
 	existing["db_path"] = cfg.DBPath
 	existing["embedding_model"] = cfg.EmbeddingModel
 	existing["embedding_dimensions"] = cfg.EmbeddingDimensions
+	existing["embedding_hosts"] = cfg.EmbeddingHosts
 	existing["chunk_size_tokens"] = cfg.ChunkSizeTokens
 	existing["chunk_overlap_tokens"] = cfg.ChunkOverlapTokens
 	existing["obsidian_vaults"] = cfg.ObsidianVaults
@@ -226,15 +228,15 @@ func Save(cfg *Config, path string) error {
 func defaults() *Config {
 	home := homeDir()
 	return &Config{
-		DBPath:              DefaultDBPath,
-		EmbeddingModel:      "bge-m3",
-		EmbeddingDimensions: 1024,
-		ChunkSizeTokens:     500,
-		ChunkOverlapTokens:  50,
-		ObsidianVaults:      []string{},
+		DBPath:                 DefaultDBPath,
+		EmbeddingModel:         "bge-m3",
+		EmbeddingDimensions:    1024,
+		ChunkSizeTokens:        500,
+		ChunkOverlapTokens:     50,
+		ObsidianVaults:         []string{},
 		ObsidianExcludeFolders: []string{},
-		EmclientDBPath: filepath.Join(home, "Library", "Application Support", "eM Client"),
-		CalibreLibraries: []string{},
+		EmclientDBPath:         filepath.Join(home, "Library", "Application Support", "eM Client"),
+		CalibreLibraries:       []string{},
 		NetnewswireDBPath: filepath.Join(home, "Library", "Containers",
 			"com.ranchero.NetNewsWire-Evergreen", "Data", "Library",
 			"Application Support", "NetNewsWire", "Accounts"),
@@ -257,11 +259,11 @@ func defaults() *Config {
 			MinWordCount:  10,
 		},
 		GUI: GUIConfig{
-			AutoStartMCP:             true,
-			MCPPort:                  31123,
-			AutoReindex:              false,
+			AutoStartMCP:               true,
+			MCPPort:                    31123,
+			AutoReindex:                false,
 			AutoReindexIntervalMinutes: 60,
-			StartOnLogin:             false,
+			StartOnLogin:               false,
 		},
 	}
 }

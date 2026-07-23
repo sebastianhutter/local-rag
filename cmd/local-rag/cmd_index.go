@@ -6,20 +6,41 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/spf13/cobra"
 
 	"github.com/sebastianhutter/local-rag-go/internal/config"
 	"github.com/sebastianhutter/local-rag-go/internal/db"
+	"github.com/sebastianhutter/local-rag-go/internal/embeddings"
 	"github.com/sebastianhutter/local-rag-go/internal/indexer"
 )
 
 var forceIndex bool
 var noPrune bool
 
+// sortedKeys returns the keys of a collection map in deterministic (sorted)
+// order, so `index code`/`index all` process collections predictably rather
+// than in Go's randomized map-iteration order.
+func sortedKeys(m map[string][]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 var indexCmd = &cobra.Command{
 	Use:   "index",
 	Short: "Index content from various sources",
+	// Resolve the embedding host once before any index subcommand runs, so a
+	// configured remote Ollama (embedding_hosts) is preferred when reachable.
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		if cfg, err := config.Load(""); err == nil {
+			embeddings.ResolveHost(cfg.EmbeddingHosts, cfg.EmbeddingModel)
+		}
+	},
 }
 
 // --- index obsidian ---
@@ -164,9 +185,7 @@ var indexProjectCmd = &cobra.Command{
 			}
 			projectNames = []string{name}
 		} else {
-			for name := range cfg.Projects {
-				projectNames = append(projectNames, name)
-			}
+			projectNames = sortedKeys(cfg.Projects)
 		}
 
 		for _, name := range projectNames {
@@ -211,9 +230,7 @@ var indexCodeCmd = &cobra.Command{
 			}
 			repoNames = []string{name}
 		} else {
-			for name := range cfg.Repositories {
-				repoNames = append(repoNames, name)
-			}
+			repoNames = sortedKeys(cfg.Repositories)
 		}
 
 		for _, repoName := range repoNames {
@@ -249,12 +266,12 @@ var indexAllCmd = &cobra.Command{
 		// Auto-prune obsidian, code, and project collections before indexing
 		if !noPrune {
 			autoPrune(conn, cfg, "obsidian")
-			for repoName := range cfg.Repositories {
+			for _, repoName := range sortedKeys(cfg.Repositories) {
 				if cfg.IsCollectionEnabled(repoName) {
 					autoPrune(conn, cfg, repoName)
 				}
 			}
-			for projectName := range cfg.Projects {
+			for _, projectName := range sortedKeys(cfg.Projects) {
 				if cfg.IsCollectionEnabled(projectName) {
 					autoPrune(conn, cfg, projectName)
 				}
@@ -304,11 +321,11 @@ var indexAllCmd = &cobra.Command{
 			})
 		}
 
-		for repoName, configPaths := range cfg.Repositories {
+		for _, repoName := range sortedKeys(cfg.Repositories) {
 			if !cfg.IsCollectionEnabled(repoName) {
 				continue
 			}
-			repos := indexer.ResolveRepoPaths(configPaths)
+			repos := indexer.ResolveRepoPaths(cfg.Repositories[repoName])
 			for _, repoPath := range repos {
 				rn, rp := repoName, repoPath
 				label := fmt.Sprintf("%s/%s", rn, filepath.Base(rp))
@@ -322,11 +339,11 @@ var indexAllCmd = &cobra.Command{
 		}
 
 		// Project collections from config
-		for projectName, projectPaths := range cfg.Projects {
+		for _, projectName := range sortedKeys(cfg.Projects) {
 			if !cfg.IsCollectionEnabled(projectName) {
 				continue
 			}
-			pn, pp := projectName, projectPaths
+			pn, pp := projectName, cfg.Projects[projectName]
 			sources = append(sources, indexSource{
 				label: pn,
 				run: func() *indexer.IndexResult {
@@ -423,7 +440,6 @@ func truncateStr(s string, maxLen int) string {
 	}
 	return s[:maxLen]
 }
-
 
 func autoPrune(conn *sql.DB, cfg *config.Config, collectionName string) {
 	if noPrune {

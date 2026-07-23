@@ -304,6 +304,10 @@ Config file location: `~/.local-rag/config.json`
   "db_path": "~/.local-rag/rag.db",
   "embedding_model": "bge-m3",
   "embedding_dimensions": 1024,
+  "embedding_hosts": [
+    "http://192.168.30.90:11434",
+    "http://127.0.0.1:11434"
+  ],
   "chunk_size_tokens": 500,
   "chunk_overlap_tokens": 50,
   "obsidian_vaults": [
@@ -346,6 +350,8 @@ Config file location: `~/.local-rag/config.json`
   }
 }
 ```
+
+**`embedding_hosts`** (optional): an ordered list of Ollama endpoints. At startup (index/search/serve/GUI) the first host that is reachable **and already serves `embedding_model`** is selected and exported as `OLLAMA_HOST`; if none qualify it falls back to Ollama's default (localhost). An `OLLAMA_HOST` already set in the environment overrides the list. This lets a fast remote/GPU Ollama be used when available (e.g. for a heavy reindex) and transparently fall back to local otherwise. **All listed hosts must serve the same embedding model** (identical weights) or vectors will be inconsistent with the existing corpus. `index code` / `index all` process collections in sorted (deterministic) order.
 
 ---
 

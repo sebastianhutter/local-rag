@@ -221,6 +221,7 @@ Config file: `~/.local-rag/config.json`
 | `db_path`                           | `~/.local-rag/rag.db`                     | SQLite database location                 |
 | `embedding_model`                   | `bge-m3`                                  | Ollama embedding model                   |
 | `embedding_dimensions`              | `1024`                                    | Embedding vector dimensions              |
+| `embedding_hosts`                   | *(unset → localhost)*                     | Ordered Ollama hosts; first reachable one that has the model is used (else local). `OLLAMA_HOST` env overrides. |
 | `chunk_size_tokens`                 | `500`                                     | Chunk size in tokens                     |
 | `chunk_overlap_tokens`              | `50`                                      | Overlap between chunks                   |
 | `obsidian_vaults`                   | `[]`                                      | Paths to Obsidian vaults                 |

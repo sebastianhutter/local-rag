@@ -38,6 +38,7 @@ var searchCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("load config: %w", err)
 		}
+		embeddings.ResolveHost(cfg.EmbeddingHosts, cfg.EmbeddingModel)
 
 		dbPath := cfg.ExpandedDBPath()
 		if _, err := os.Stat(dbPath); os.IsNotExist(err) {

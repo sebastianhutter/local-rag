@@ -7,7 +7,18 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+
+	"github.com/sebastianhutter/local-rag-go/internal/config"
+	"github.com/sebastianhutter/local-rag-go/internal/embeddings"
 )
+
+// resolveEmbeddingHost picks the embedding Ollama host once at server startup,
+// preferring a reachable configured host that serves the model.
+func resolveEmbeddingHost() {
+	if cfg, err := config.Load(""); err == nil {
+		embeddings.ResolveHost(cfg.EmbeddingHosts, cfg.EmbeddingModel)
+	}
+}
 
 // CreateServer builds an MCPServer with all tools registered.
 func CreateServer() *server.MCPServer {
@@ -32,6 +43,7 @@ func CreateServer() *server.MCPServer {
 
 // ServeStdio runs the MCP server over stdin/stdout.
 func ServeStdio() error {
+	resolveEmbeddingHost()
 	s := CreateServer()
 	slog.Info("starting MCP server (stdio)")
 	return server.ServeStdio(s)
@@ -39,6 +51,7 @@ func ServeStdio() error {
 
 // ServeSSE runs the MCP server over HTTP/SSE on the given port.
 func ServeSSE(port int) error {
+	resolveEmbeddingHost()
 	s := CreateServer()
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	slog.Info("starting MCP server (SSE)", "addr", addr)
