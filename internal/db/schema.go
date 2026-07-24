@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 )
 
@@ -201,6 +202,54 @@ func InsertEmbedding(conn *sql.DB, documentID int64, vecBytes []byte) error {
 		return fmt.Errorf("insert binary vec: %w", err)
 	}
 	return nil
+}
+
+// PruneSources deletes the given sources together with all their documents and
+// embeddings (float + binary mirror) in a single transaction.
+//
+// It is the bulk equivalent of deleting sources one at a time. Deleting from
+// the vec0 tables filters on the `document_id` metadata column, which forces a
+// full scan of the vector table per DELETE — so doing it once per source is
+// O(sources × table size) and painfully slow when pruning many files. Batching
+// every stale source into one pair of DELETEs (via a document-id subquery)
+// makes it a single scan of each vector table regardless of how many sources
+// are pruned.
+func PruneSources(conn *sql.DB, sourceIDs []int64) error {
+	if len(sourceIDs) == 0 {
+		return nil
+	}
+	inList := intList(sourceIDs)
+	docSubquery := "SELECT id FROM documents WHERE source_id IN (" + inList + ")"
+
+	tx, err := conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin prune tx: %w", err)
+	}
+	// Order matters: delete vector rows (which resolve document ids from the
+	// documents table) before the documents themselves.
+	stmts := []string{
+		"DELETE FROM vec_documents_bin WHERE document_id IN (" + docSubquery + ")",
+		"DELETE FROM vec_documents WHERE document_id IN (" + docSubquery + ")",
+		"DELETE FROM documents WHERE source_id IN (" + inList + ")",
+		"DELETE FROM sources WHERE id IN (" + inList + ")",
+	}
+	for _, s := range stmts {
+		if _, err := tx.Exec(s); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("prune delete: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// intList renders int64 IDs as a comma-separated SQL literal list. The IDs are
+// internal primary keys, so inlining them is safe from injection.
+func intList(ids []int64) string {
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = strconv.FormatInt(id, 10)
+	}
+	return strings.Join(parts, ",")
 }
 
 // DeleteEmbeddings removes embeddings for the given document IDs from both the

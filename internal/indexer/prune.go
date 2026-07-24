@@ -8,8 +8,26 @@ import (
 	"strings"
 
 	"github.com/sebastianhutter/local-rag-go/internal/config"
+	"github.com/sebastianhutter/local-rag-go/internal/db"
 	"github.com/sebastianhutter/local-rag-go/internal/parser"
 )
+
+// finishPrune bulk-deletes the collected stale source IDs in a single
+// transaction (one scan of each vector table) and updates the result. Batching
+// is essential: deleting sources one at a time re-scans the vec0 tables per
+// source, which is prohibitively slow for large collections.
+func finishPrune(conn *sql.DB, result *PruneResult, stale []int64, kind string) {
+	if len(stale) == 0 {
+		return
+	}
+	slog.Info("pruning stale sources", "kind", kind, "count", len(stale))
+	if err := db.PruneSources(conn, stale); err != nil {
+		result.Errors++
+		result.ErrorMessages = append(result.ErrorMessages, err.Error())
+		return
+	}
+	result.Pruned += len(stale)
+}
 
 // PruneAll prunes stale sources from all collections.
 func PruneAll(conn *sql.DB, cfg *config.Config) *PruneResult {
@@ -25,9 +43,9 @@ func PruneAll(conn *sql.DB, cfg *config.Config) *PruneResult {
 	defer rows.Close()
 
 	type collInfo struct {
-		id     int64
-		name   string
-		ctype  string
+		id    int64
+		name  string
+		ctype string
 	}
 	var collections []collInfo
 	for rows.Next() {
@@ -100,6 +118,7 @@ func pruneFileSources(conn *sql.DB, collectionID int64) *PruneResult {
 		return result
 	}
 
+	var stale []int64
 	for _, s := range sources {
 		// Skip URI-style sources
 		if strings.Contains(s.SourcePath, "://") {
@@ -107,12 +126,11 @@ func pruneFileSources(conn *sql.DB, collectionID int64) *PruneResult {
 		}
 		result.Checked++
 		if _, err := os.Stat(s.SourcePath); os.IsNotExist(err) {
-			slog.Info("pruning stale source", "path", s.SourcePath)
-			deleteSourceByID(conn, s.ID)
-			result.Pruned++
+			stale = append(stale, s.ID)
 		}
 	}
 
+	finishPrune(conn, result, stale, "file")
 	return result
 }
 
@@ -154,15 +172,15 @@ func pruneEmailSources(conn *sql.DB, cfg *config.Config, collectionID int64) *Pr
 		return result
 	}
 
+	var stale []int64
 	for _, s := range sources {
 		result.Checked++
 		if !currentIDs[s.SourcePath] {
-			slog.Info("pruning stale email", "messageID", s.SourcePath)
-			deleteSourceByID(conn, s.ID)
-			result.Pruned++
+			stale = append(stale, s.ID)
 		}
 	}
 
+	finishPrune(conn, result, stale, "email")
 	return result
 }
 
@@ -204,15 +222,15 @@ func pruneRSSSources(conn *sql.DB, cfg *config.Config, collectionID int64) *Prun
 		return result
 	}
 
+	var stale []int64
 	for _, s := range sources {
 		result.Checked++
 		if !currentIDs[s.SourcePath] {
-			slog.Info("pruning stale article", "articleID", s.SourcePath)
-			deleteSourceByID(conn, s.ID)
-			result.Pruned++
+			stale = append(stale, s.ID)
 		}
 	}
 
+	finishPrune(conn, result, stale, "rss")
 	return result
 }
 
@@ -246,6 +264,7 @@ func pruneCalibreSources(conn *sql.DB, cfg *config.Config, collectionID int64) *
 		return result
 	}
 
+	var stale []int64
 	for _, s := range sources {
 		result.Checked++
 
@@ -265,20 +284,17 @@ func pruneCalibreSources(conn *sql.DB, cfg *config.Config, collectionID int64) *
 				}
 			}
 			if !found {
-				slog.Info("pruning stale calibre source", "path", s.SourcePath)
-				deleteSourceByID(conn, s.ID)
-				result.Pruned++
+				stale = append(stale, s.ID)
 			}
 		} else {
 			// File-based source — check file existence
 			if _, err := os.Stat(s.SourcePath); os.IsNotExist(err) {
-				slog.Info("pruning stale calibre file", "path", s.SourcePath)
-				deleteSourceByID(conn, s.ID)
-				result.Pruned++
+				stale = append(stale, s.ID)
 			}
 		}
 	}
 
+	finishPrune(conn, result, stale, "calibre")
 	return result
 }
 
@@ -295,6 +311,7 @@ func pruneCodeSources(conn *sql.DB, cfg *config.Config, collectionID int64) *Pru
 		return result
 	}
 
+	var stale []int64
 	for _, s := range sources {
 		// Skip commit sources — history is preserved
 		if strings.HasPrefix(s.SourcePath, "git://") {
@@ -302,11 +319,10 @@ func pruneCodeSources(conn *sql.DB, cfg *config.Config, collectionID int64) *Pru
 		}
 		result.Checked++
 		if _, err := os.Stat(s.SourcePath); os.IsNotExist(err) {
-			slog.Info("pruning stale code file", "path", s.SourcePath)
-			deleteSourceByID(conn, s.ID)
-			result.Pruned++
+			stale = append(stale, s.ID)
 		}
 	}
 
+	finishPrune(conn, result, stale, "code")
 	return result
 }
