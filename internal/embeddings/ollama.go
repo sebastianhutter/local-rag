@@ -19,13 +19,26 @@ import (
 // hostProbeTimeout bounds each reachability/model check when resolving a host.
 const hostProbeTimeout = 2 * time.Second
 
-const (
-	// BatchSize is the maximum number of texts per Ollama API call.
-	BatchSize = 32
-	// Timeout is the per-request timeout — generous because the first call
-	// may trigger model loading.
-	Timeout = 300 * time.Second
-)
+// DefaultBatchSize is the number of texts per Ollama embedding call when not
+// configured. Larger batches keep a GPU host better fed (higher throughput) at
+// the cost of more memory per request; SetBatchSize overrides it from config.
+const DefaultBatchSize = 32
+
+// Timeout is the per-request timeout — generous because the first call may
+// trigger model loading.
+const Timeout = 300 * time.Second
+
+// batchSize is the maximum number of texts per Ollama API call. It is a package
+// variable so it can be tuned from config at startup (see SetBatchSize).
+var batchSize = DefaultBatchSize
+
+// SetBatchSize sets the embedding batch size. Non-positive values are ignored,
+// keeping DefaultBatchSize.
+func SetBatchSize(n int) {
+	if n > 0 {
+		batchSize = n
+	}
+}
 
 // OllamaConnectionError indicates that Ollama is not reachable.
 type OllamaConnectionError struct {
@@ -156,14 +169,14 @@ func GetEmbeddings(ctx context.Context, texts []string, model string) ([][]float
 
 	all := make([][]float32, 0, len(texts))
 
-	for start := 0; start < len(texts); start += BatchSize {
-		end := start + BatchSize
+	for start := 0; start < len(texts); start += batchSize {
+		end := start + batchSize
 		if end > len(texts) {
 			end = len(texts)
 		}
 		batch := texts[start:end]
 
-		if len(texts) > BatchSize {
+		if len(texts) > batchSize {
 			slog.Info("embedding batch",
 				"from", start+1,
 				"to", end,

@@ -39,6 +39,7 @@ var indexCmd = &cobra.Command{
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		if cfg, err := config.Load(""); err == nil {
 			embeddings.ResolveHost(cfg.EmbeddingHosts, cfg.EmbeddingModel)
+			embeddings.SetBatchSize(cfg.EmbeddingBatchSize)
 		}
 	},
 }

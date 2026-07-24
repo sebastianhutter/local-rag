@@ -308,6 +308,7 @@ Config file location: `~/.local-rag/config.json`
     "http://192.168.30.90:11434",
     "http://127.0.0.1:11434"
   ],
+  "embedding_batch_size": 32,
   "chunk_size_tokens": 500,
   "chunk_overlap_tokens": 50,
   "obsidian_vaults": [
@@ -352,6 +353,8 @@ Config file location: `~/.local-rag/config.json`
 ```
 
 **`embedding_hosts`** (optional): an ordered list of Ollama endpoints. At startup (index/search/serve/GUI) the first host that is reachable **and already serves `embedding_model`** is selected and exported as `OLLAMA_HOST`; if none qualify it falls back to Ollama's default (localhost). An `OLLAMA_HOST` already set in the environment overrides the list. This lets a fast remote/GPU Ollama be used when available (e.g. for a heavy reindex) and transparently fall back to local otherwise. **All listed hosts must serve the same embedding model** (identical weights) or vectors will be inconsistent with the existing corpus. `index code` / `index all` process collections in sorted (deterministic) order.
+
+**`embedding_batch_size`** (optional, default `32`): number of texts sent per Ollama embedding request. Larger batches keep a GPU host better fed — throughput scales up to ~128 (diminishing returns beyond) — at the cost of more memory per request, so a small/CPU/memory-constrained host may prefer a lower value. All of `embedding_model`, `embedding_hosts`, and `embedding_batch_size` are editable in the menu-bar app under **Settings → General** (embedding batch size field + the *Ollama Hosts* card).
 
 ---
 

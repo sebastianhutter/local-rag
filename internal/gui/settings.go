@@ -141,6 +141,15 @@ func (a *App) buildGeneralTab(cfg *config.Config, w fyne.Window) fyne.CanvasObje
 		}
 	}
 
+	batchEntry := widget.NewEntry()
+	batchEntry.SetText(strconv.Itoa(cfg.EmbeddingBatchSize))
+	batchEntry.Validator = intValidator(1, 512)
+	batchEntry.OnChanged = func(s string) {
+		if v, err := strconv.Atoi(s); err == nil {
+			cfg.EmbeddingBatchSize = v
+		}
+	}
+
 	chunkEntry := widget.NewEntry()
 	chunkEntry.SetText(strconv.Itoa(cfg.ChunkSizeTokens))
 	chunkEntry.Validator = intValidator(50, 10000)
@@ -163,6 +172,7 @@ func (a *App) buildGeneralTab(cfg *config.Config, w fyne.Window) fyne.CanvasObje
 		widget.NewFormItem("Database path", container.NewBorder(nil, nil, nil, dbBrowseBtn, dbPathEntry)),
 		widget.NewFormItem("Embedding model", modelSelect),
 		widget.NewFormItem("Embedding dimensions", dimEntry),
+		widget.NewFormItem("Embedding batch size", batchEntry),
 		widget.NewFormItem("Chunk size (tokens)", chunkEntry),
 		widget.NewFormItem("Chunk overlap (tokens)", overlapEntry),
 	)

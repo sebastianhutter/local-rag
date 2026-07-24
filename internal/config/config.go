@@ -48,6 +48,7 @@ type Config struct {
 	EmbeddingModel            string              `json:"embedding_model"`
 	EmbeddingDimensions       int                 `json:"embedding_dimensions"`
 	EmbeddingHosts            []string            `json:"embedding_hosts"`
+	EmbeddingBatchSize        int                 `json:"embedding_batch_size"`
 	ChunkSizeTokens           int                 `json:"chunk_size_tokens"`
 	ChunkOverlapTokens        int                 `json:"chunk_overlap_tokens"`
 	ObsidianVaults            []string            `json:"obsidian_vaults"`
@@ -190,6 +191,7 @@ func Save(cfg *Config, path string) error {
 	existing["embedding_model"] = cfg.EmbeddingModel
 	existing["embedding_dimensions"] = cfg.EmbeddingDimensions
 	existing["embedding_hosts"] = cfg.EmbeddingHosts
+	existing["embedding_batch_size"] = cfg.EmbeddingBatchSize
 	existing["chunk_size_tokens"] = cfg.ChunkSizeTokens
 	existing["chunk_overlap_tokens"] = cfg.ChunkOverlapTokens
 	existing["obsidian_vaults"] = cfg.ObsidianVaults
@@ -231,6 +233,7 @@ func defaults() *Config {
 		DBPath:                 DefaultDBPath,
 		EmbeddingModel:         "bge-m3",
 		EmbeddingDimensions:    1024,
+		EmbeddingBatchSize:     32,
 		ChunkSizeTokens:        500,
 		ChunkOverlapTokens:     50,
 		ObsidianVaults:         []string{},

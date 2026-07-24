@@ -67,6 +67,7 @@ func Run() error {
 	// Prefer a configured remote embedding host when reachable (falls back to
 	// local). Sets OLLAMA_HOST for the whole GUI process — indexing and MCP.
 	embeddings.ResolveHost(cfg.EmbeddingHosts, cfg.EmbeddingModel)
+	embeddings.SetBatchSize(cfg.EmbeddingBatchSize)
 
 	// Set up log file — truncate on startup so each session starts fresh.
 	logPath := filepath.Join(config.DefaultConfigDir, "local-rag.log")

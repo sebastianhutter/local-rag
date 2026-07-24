@@ -90,7 +90,7 @@ Launch `local-rag` with no arguments (or `local-rag gui`) to start the menu bar 
 - **MCP server toggle** — start/stop the built-in MCP SSE server (default port 31123)
 - **Status display** — collection and chunk counts, indexing progress
 - **Index menu** — trigger indexing for individual collections or all at once
-- **Settings** — configure sources, embedding model, search weights, MCP port, auto-reindex interval, start-on-login
+- **Settings** — configure sources, embedding model, **Ollama hosts** (ordered endpoints; first reachable one that has the model is used, else local) and **embedding batch size**, search weights, MCP port, auto-reindex interval, start-on-login
 - **Log viewer** — live scrolling log output with auto-scroll toggle
 - **Auto-reindex** — periodically re-index all sources on a configurable interval
 - **macOS notifications** — notifies when indexing completes or errors occur
@@ -222,6 +222,7 @@ Config file: `~/.local-rag/config.json`
 | `embedding_model`                   | `bge-m3`                                  | Ollama embedding model                   |
 | `embedding_dimensions`              | `1024`                                    | Embedding vector dimensions              |
 | `embedding_hosts`                   | *(unset → localhost)*                     | Ordered Ollama hosts; first reachable one that has the model is used (else local). `OLLAMA_HOST` env overrides. |
+| `embedding_batch_size`              | `32`                                      | Texts per Ollama embedding request; higher (e.g. `128`) improves GPU throughput. |
 | `chunk_size_tokens`                 | `500`                                     | Chunk size in tokens                     |
 | `chunk_overlap_tokens`              | `50`                                      | Overlap between chunks                   |
 | `obsidian_vaults`                   | `[]`                                      | Paths to Obsidian vaults                 |
