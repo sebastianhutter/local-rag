@@ -55,3 +55,13 @@ func TestEmailToItemNoSubject(t *testing.T) {
 		t.Errorf("Title = %q, want the no-subject placeholder", item.Title)
 	}
 }
+
+func TestEmailToItemSetsSourceType(t *testing.T) {
+	item := emailToItem(&parser.EmailMessage{
+		MessageID: "m1", Subject: "S", BodyText: "body",
+	}, testBatchConfig(32))
+
+	if item.SourceType != "email" {
+		t.Errorf("SourceType = %q, want email", item.SourceType)
+	}
+}

@@ -76,3 +76,16 @@ func TestArticleToItemUntitled(t *testing.T) {
 		t.Errorf("Title = %q, want the untitled placeholder", item.Title)
 	}
 }
+
+// Every item must carry a source_type: it is stored on the sources row and is
+// what `--type` / the MCP source_type filter matches on. An empty one silently
+// removes the whole source from those filters.
+func TestArticleToItemSetsSourceType(t *testing.T) {
+	item := articleToItem(&parser.Article{
+		ArticleID: "a1", Title: "T", BodyText: "body",
+	}, testBatchConfig(32))
+
+	if item.SourceType != "rss" {
+		t.Errorf("SourceType = %q, want rss", item.SourceType)
+	}
+}

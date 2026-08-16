@@ -135,6 +135,7 @@ func emailToItem(email *parser.EmailMessage, cfg *config.Config) *indexItem {
 
 	return &indexItem{
 		SourcePath: email.MessageID,
+		SourceType: "email",
 		Title:      title,
 		Chunks: chunker.ChunkEmail(email.Subject, email.BodyText,
 			cfg.ChunkSizeTokens, cfg.ChunkOverlapTokens),

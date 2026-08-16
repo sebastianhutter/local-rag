@@ -495,3 +495,34 @@ func TestClearRepoForRebuildIsScoped(t *testing.T) {
 		t.Errorf("got %d vectors, want 1 — alpha's embeddings should be gone, beta's kept", vecs)
 	}
 }
+
+// storeItem writes SourceType onto the sources row verbatim, so an item that
+// forgets to set it produces an untyped source that no type filter can find.
+func TestStoreItemRequiresSourceType(t *testing.T) {
+	conn := setupTestDB(t)
+	collID := mustGetOrCreate(t, conn, "rss", "system")
+
+	item := makeItems(1, 1)[0]
+	item.SourceType = "" // what articleToItem used to produce
+	if err := storeItem(conn, collID, item, [][]float32{make([]float32, 1024)}); err != nil {
+		t.Fatal(err)
+	}
+
+	var got string
+	conn.QueryRow("SELECT source_type FROM sources WHERE collection_id = ?", collID).Scan(&got)
+	if got != "" {
+		t.Fatalf("setup wrong: expected the empty type to be stored, got %q", got)
+	}
+
+	// And with a type set, it round-trips.
+	item2 := makeItems(1, 1)[0]
+	item2.SourcePath = "id-typed"
+	item2.SourceType = "rss"
+	if err := storeItem(conn, collID, item2, [][]float32{make([]float32, 1024)}); err != nil {
+		t.Fatal(err)
+	}
+	conn.QueryRow("SELECT source_type FROM sources WHERE source_path = 'id-typed'").Scan(&got)
+	if got != "rss" {
+		t.Errorf("source_type = %q, want rss", got)
+	}
+}

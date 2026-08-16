@@ -134,7 +134,11 @@ func handleRagListCollections(ctx context.Context, request mcp.CallToolRequest) 
 			"created_at":   createdAt,
 		}
 		if description.Valid {
-			entry["description"] = description.String
+			if text, repos := describeCollection(description.String); text != "" {
+				entry["description"] = text
+			} else if repos > 0 {
+				entry["repositories"] = repos
+			}
 		}
 		if lastIndexed.Valid {
 			entry["last_indexed"] = lastIndexed.String
@@ -144,6 +148,32 @@ func handleRagListCollections(ctx context.Context, request mcp.CallToolRequest) 
 
 	data, _ := json.MarshalIndent(collections, "", "  ")
 	return mcp.NewToolResultText(string(data)), nil
+}
+
+// describeCollection turns a collection's stored description into something fit
+// for a client.
+//
+// The description column is overloaded: system collections keep a human string
+// there, but code collections store git watermarks — a JSON map of repository
+// path to indexed commit SHA. For a collection with many repositories that runs
+// to tens of thousands of characters, and rag_list_collections was returning it
+// verbatim, so listing 15 collections cost ~27k tokens of an MCP client's
+// context. Watermarks are internal bookkeeping and are summarised instead.
+func describeCollection(description string) (text string, repos int) {
+	if description == "" {
+		return "", 0
+	}
+	if strings.HasPrefix(description, "{") {
+		var watermarks map[string]string
+		if err := json.Unmarshal([]byte(description), &watermarks); err == nil {
+			seen := map[string]struct{}{}
+			for key := range watermarks {
+				seen[strings.TrimSuffix(key, ":history")] = struct{}{}
+			}
+			return "", len(seen)
+		}
+	}
+	return description, 0
 }
 
 // --- rag_index ---
@@ -303,7 +333,11 @@ func handleRagCollectionInfo(ctx context.Context, request mcp.CallToolRequest) (
 		"sample_titles": sampleTitles,
 	}
 	if description.Valid {
-		output["description"] = description.String
+		if text, repos := describeCollection(description.String); text != "" {
+			output["description"] = text
+		} else if repos > 0 {
+			output["repositories"] = repos
+		}
 	}
 	if lastIndexed.Valid {
 		output["last_indexed"] = lastIndexed.String

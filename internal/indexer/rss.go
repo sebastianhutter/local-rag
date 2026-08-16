@@ -159,6 +159,7 @@ func articleToItem(article *parser.Article, cfg *config.Config) *indexItem {
 
 	return &indexItem{
 		SourcePath: article.ArticleID,
+		SourceType: "rss",
 		Title:      title,
 		// Reuse the email chunker — RSS articles have a similar structure.
 		Chunks: chunker.ChunkEmail(article.Title, article.BodyText,
