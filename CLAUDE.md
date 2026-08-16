@@ -37,6 +37,10 @@ local-rag search "kubernetes deployment strategy"
 local-rag search "invoice from supplier" --collection email
 local-rag search "API specification" --collection "Project Alpha"
 
+# Remove entries whose originals are gone
+local-rag prune                          # all collections
+local-rag prune obsidian                 # one collection
+
 # Run MCP server (for Claude Desktop / Claude Code integration)
 local-rag serve
 ```
@@ -90,6 +94,8 @@ Vector search is two-stage for speed: a fast Hamming-distance KNN over binary-qu
 
 **Incremental indexing**: Track file hashes, modification times, and watermarks. Only re-embed changed or new content. Use `--force` to re-index everything.
 
+**Pruning**: Indexing removes what indexing cannot see. Before indexing `obsidian`, `code`, `project` or `all`, a prune pass drops sources whose file no longer exists on disk, so deleted and moved files leave search results without a manual step; `--no-prune` skips it. The standalone `local-rag prune [COLLECTION]` covers every collection type — including email, calibre and rss, which are pruned against their source databases rather than the filesystem. `prune --vectors` is a separate repair path: it deletes embeddings in `vec_documents`/`vec_documents_bin` whose `document_id` no longer resolves, which CASCADE cannot do because the vec0 virtual tables have no foreign keys.
+
 ---
 
 ## Supported Sources
@@ -109,7 +115,7 @@ Vector search is two-stage for speed: a fast Hamming-distance KNN over binary-qu
 
 | Component    | Choice                     | Notes                                  |
 |--------------|----------------------------|----------------------------------------|
-| Language     | Go 1.24+                   | CGO required for SQLite                |
+| Language     | Go 1.26+                   | CGO required for SQLite                |
 | Database     | SQLite + sqlite-vec + FTS5 | Single file, no server                 |
 | Embeddings   | Ollama + bge-m3 (1024d)    | Fully local, no API keys               |
 | GUI          | Fyne v2 + systray          | macOS menu bar app                     |
@@ -192,6 +198,14 @@ CREATE VIRTUAL TABLE documents_fts USING fts5(
     content_rowid='id'
 );
 
+-- Key/value store for schema bookkeeping: 'schema_version' drives db.Migrate,
+-- 'binary_backfill_done' marks vec_documents_bin as fully populated so the
+-- one-time backfill is not re-checked on every open.
+CREATE TABLE meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
 -- Triggers to keep FTS in sync with documents table
 CREATE TRIGGER documents_ai AFTER INSERT ON documents BEGIN
     INSERT INTO documents_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
@@ -205,6 +219,8 @@ CREATE TRIGGER documents_au AFTER UPDATE ON documents BEGIN
 END;
 ```
 
+**Schema changes.** Every statement above is `CREATE ... IF NOT EXISTS`, so `InitSchema` is idempotent and adding a new table, index or virtual table there is enough — existing databases pick it up on the next open. `db.Migrate` handles only what a re-run of `InitSchema` cannot fix: data that must be rewritten (`collection_type` reclassification), columns added to an existing table (`ALTER TABLE`), and one-time backfills. Bump `SchemaVersion` and add a `if current < N` block when a change needs that; otherwise `InitSchema` alone is the migration path.
+
 ---
 
 ## File Structure
@@ -217,7 +233,18 @@ local-rag/
 ├── go.mod / go.sum                  # Go module dependencies
 ├── cmd/
 │   └── local-rag/
-│       └── main.go                  # Cobra CLI entry point
+│       ├── main.go                  # Cobra root command, global flags, version
+│       ├── cmd_index.go             # index (obsidian/email/calibre/rss/code/project/all)
+│       ├── cmd_search.go            # search
+│       ├── cmd_collections.go       # collections list/info/delete/export/paths
+│       ├── cmd_prune.go             # prune, prune --vectors
+│       ├── cmd_status.go            # status
+│       ├── cmd_serve.go             # serve (stdio / SSE)
+│       └── cmd_gui.go               # gui
+├── configs/
+│   └── config.example.json          # Annotated configuration template
+├── .github/
+│   └── workflows/release.yml        # Tagged release build
 ├── docs/
 │   ├── architecture.md              # System architecture overview
 │   ├── emclient-schema.md           # eM Client SQLite schema documentation
@@ -225,12 +252,13 @@ local-rag/
 │   └── ollama-and-embeddings.md     # Ollama setup and embedding models
 ├── internal/
 │   ├── config/                      # Configuration loading and defaults
-│   ├── db/                          # SQLite + sqlite-vec + FTS5 setup and migrations
-│   ├── embeddings/                  # Ollama embedding client
+│   ├── db/                          # SQLite + sqlite-vec + FTS5 setup, migrations, orphan/prune queries
+│   ├── embeddings/                  # Ollama embedding client + host resolution
 │   ├── chunker/                     # Text chunking strategies (per file type)
 │   ├── search/                      # Hybrid search engine (vector + FTS + RRF)
 │   ├── parser/                      # File parsers (markdown, pdf, docx, epub, html, code, rss, email, calibre)
-│   ├── indexer/                     # Source indexers (obsidian, email, calibre, rss, git, project)
+│   ├── indexer/                     # Source indexers (obsidian, email, calibre, rss, git, project),
+│   │                                #   shared batching (batch.go), pruning (prune.go)
 │   ├── mcp/                         # MCP server (tools, SSE, stdio)
 │   └── gui/                         # Fyne menu bar app, settings, log viewer
 └── scripts/
@@ -252,7 +280,12 @@ local-rag index code [NAME] [--history]          # Index repository collection(s
 local-rag index project [NAME]                    # Index project(s) from config
 local-rag index all                               # Index all configured sources at once
 
-# All index commands support --force to re-index everything
+# All index commands support --force to re-index everything, and --no-prune to skip
+# the automatic prune pass that runs for obsidian/code/project/all
+
+# Pruning
+local-rag prune [COLLECTION] [-y]                 # Drop sources whose originals are gone; omit NAME for all
+local-rag prune --vectors [-y]                    # Drop orphaned embeddings (no surviving document)
 
 # Searching
 local-rag search "query text"                     # Search all collections
@@ -282,15 +315,18 @@ local-rag collections paths update NAME \        # Rewrite path prefixes in-plac
 # Status and GUI
 local-rag status                        # Overall stats: collections, doc counts, DB size, Ollama status
 local-rag gui                           # Start menu bar app (default when no subcommand)
+local-rag --version                     # Print version
+local-rag -v, --verbose                 # Debug logging (global flag)
 
 # MCP server
 local-rag serve                         # Start MCP server (stdio transport)
 local-rag serve --port 31123            # Start with HTTP/SSE transport
 
-# MCP tools support metadata_filter for arbitrary metadata filtering:
+# Five MCP tools: rag_search, rag_list_collections, rag_collection_info, rag_index, rag_prune
 # rag_search with metadata_filter: {"source": "jira"} filters by frontmatter fields
 # rag_search also accepts a "path" param: a case-insensitive substring of the
 # source path to scope results to a subfolder or repo (e.g. "backend/services")
+# rag_search's "collection" param takes a name OR a type ('system', 'project', 'code')
 ```
 
 ---

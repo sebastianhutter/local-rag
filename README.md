@@ -36,18 +36,18 @@ ollama pull bge-m3
 brew install tesseract tesseract-lang
 
 # Build
-git clone https://github.com/sebastianhutter/local-rag-go.git
-cd local-rag-go
+git clone https://github.com/sebastianhutter/local-rag.git
+cd local-rag
 make build            # binary at bin/local-rag
 make app              # macOS .app bundle at bin/local-rag.app
 make dmg              # DMG installer at bin/local-rag.dmg
 ```
 
-Requires Go 1.24+, CGO enabled (for SQLite), and macOS (for `sips`/`iconutil`/`hdiutil`). Tesseract is optional — only needed for OCR on scanned/image-only PDFs.
+Requires Go 1.26+, CGO enabled (for SQLite), and macOS (for `sips`/`iconutil`/`hdiutil`). Tesseract is optional — only needed for OCR on scanned/image-only PDFs.
 
 ## Quick Start
 
-1. **Configure sources** — edit `~/.local-rag/config.json` or use the Settings GUI:
+1. **Configure sources** — edit `~/.local-rag/config.json` (see `configs/config.example.json` for a fully annotated template) or use the Settings GUI:
 
 ```json
 {
@@ -82,6 +82,13 @@ local-rag search "API specification" --type pdf --top 20
 local-rag search "s3 bucket policy" --collection code --path infrastructure/modules
 ```
 
+4. **Prune** — indexing file-backed collections (obsidian, code, project) removes stale entries automatically, so deleted files disappear from search without extra steps. To prune on demand:
+
+```bash
+local-rag prune                 # all collections, including email/calibre/rss
+local-rag prune obsidian        # a single collection
+```
+
 ## GUI
 
 Launch `local-rag` with no arguments (or `local-rag gui`) to start the menu bar app. There is no Dock icon — it lives entirely in the macOS menu bar.
@@ -99,7 +106,7 @@ Launch `local-rag` with no arguments (or `local-rag gui`) to start the menu bar 
 
 local-rag exposes 5 MCP tools: `rag_search`, `rag_list_collections`, `rag_collection_info`, `rag_index`, and `rag_prune`.
 
-The `rag_search` tool supports a `metadata_filter` parameter — a JSON object of key-value pairs for filtering by arbitrary metadata fields (e.g. `{"source": "jira", "issue_key": "CB-123"}`) — and a `path` parameter to scope results to a subfolder or repo by a case-insensitive substring of the source path (e.g. `"infrastructure/modules"`).
+The `rag_search` tool supports a `metadata_filter` parameter — a JSON object of key-value pairs for filtering by arbitrary metadata fields (e.g. `{"source": "jira", "issue_key": "CB-123"}`) — and a `path` parameter to scope results to a subfolder or repo by a case-insensitive substring of the source path (e.g. `"infrastructure/modules"`). Its `collection` parameter accepts either a collection name or a collection *type* (`system`, `project`, `code`), so a search can be scoped to all code repos at once.
 
 ### GUI Mode (SSE)
 
@@ -160,7 +167,18 @@ local-rag index project [NAME]                   Index project(s) from config; o
 local-rag index all                              Index all configured sources
 ```
 
-All index commands accept `--force` to re-index everything regardless of change detection.
+All index commands accept `--force` to re-index everything regardless of change detection, and `--no-prune` to skip the automatic pruning pass.
+
+Indexing `obsidian`, `code`, `project` and `all` prunes stale sources first — entries whose file no longer exists on disk are removed before the run, so deleted and moved files do not linger in search results.
+
+### Pruning
+
+```
+local-rag prune [COLLECTION]     Remove sources whose originals are gone; omit COLLECTION for all
+local-rag prune --vectors        Remove orphaned embeddings (vectors with no surviving document)
+```
+
+Pruning covers deleted files, emails removed from eM Client, articles purged from NetNewsWire, books removed from Calibre, and files deleted from repositories. `-y` skips confirmation.
 
 ### Searching
 
@@ -206,6 +224,7 @@ local-rag collections paths update "Project Alpha" \
 
 ```
 local-rag status            Database stats, collection counts, Ollama status
+local-rag prune [NAME]      Remove stale sources (see Pruning above)
 local-rag serve [--port N]  Start MCP server (stdio, or SSE on given port)
 local-rag gui               Start menu bar app (default when no subcommand)
 local-rag --version         Print version
@@ -223,7 +242,9 @@ Config file: `~/.local-rag/config.json`
 | `embedding_dimensions`              | `1024`                                    | Embedding vector dimensions              |
 | `embedding_hosts`                   | *(unset → localhost)*                     | Ordered Ollama hosts; first reachable one that has the model is used (else local). `OLLAMA_HOST` env overrides. |
 | `embedding_batch_size`              | `32`                                      | Texts per Ollama embedding request; higher (e.g. `128`) improves GPU throughput. |
-| `chunk_size_tokens`                 | `500`                                     | Chunk size in tokens                     |
+| `embedding_workers`                 | `4`                                       | Embedding requests in flight at once; raise for a fast remote host, `1` to serialise. |
+| `embedding_num_batch`               | `0` *(server default)*                    | Ollama `num_batch` option. Raise to the model context (e.g. `8192`) if the log shows inputs rejected as *too large to process*. |
+| `chunk_size_tokens`                 | `500`                                     | Chunk size in whitespace-separated words |
 | `chunk_overlap_tokens`              | `50`                                      | Overlap between chunks                   |
 | `obsidian_vaults`                   | `[]`                                      | Paths to Obsidian vaults                 |
 | `obsidian_exclude_folders`          | `[]`                                      | Folders to skip in vaults                |
@@ -233,8 +254,9 @@ Config file: `~/.local-rag/config.json`
 | `repositories`                      | `{}`                                      | Map of collection name to repo/directory paths (directories are scanned recursively for git repos) |
 | `projects`                          | `{}`                                      | Map of project name to document paths    |
 | `disabled_collections`              | `[]`                                      | Collection names to skip during indexing |
+| `skip_cloud_placeholders`           | `true`                                    | Skip cloud-only files (OneDrive/iCloud/Google/Synology on-demand placeholders) instead of downloading them |
 | `git_history_in_months`             | `6`                                       | How far back to index commit history     |
-| `git_commit_subject_blacklist`      | `[]`                                      | Commit subjects to skip                  |
+| `git_commit_subject_blacklist`      | `[]`                                      | Skip commits whose subject *starts with* any of these strings (prefix match) |
 | `search_defaults.top_k`             | `10`                                      | Default number of search results         |
 | `search_defaults.rrf_k`             | `60`                                      | Reciprocal Rank Fusion parameter         |
 | `search_defaults.vector_weight`     | `0.7`                                     | Weight for vector similarity             |
@@ -254,7 +276,7 @@ Config file: `~/.local-rag/config.json`
 
 | Component    | Choice                     | Notes                                  |
 |--------------|----------------------------|----------------------------------------|
-| Language     | Go 1.24+                   | CGO required for SQLite                |
+| Language     | Go 1.26+                   | CGO required for SQLite                |
 | Database     | SQLite + sqlite-vec + FTS5 | Single file, no server                 |
 | Embeddings   | Ollama + bge-m3 (1024d)    | Fully local, no API keys               |
 | GUI          | Fyne v2 + systray          | macOS menu bar app                     |
@@ -297,21 +319,28 @@ bin/local-rag --version    # local-rag version 1.2.3
 ### Architecture
 
 ```
-cmd/local-rag/       CLI entry point (Cobra)
+cmd/local-rag/       CLI entry point (Cobra) — one cmd_*.go per command group
 internal/
   config/            Configuration loading and defaults
   db/                SQLite + sqlite-vec + FTS5 setup and migrations
-  embeddings/        Ollama embedding client
+  embeddings/        Ollama embedding client and host resolution
   chunker/           Text chunking strategies
   search/            Hybrid search engine (vector + FTS + RRF)
   parser/            File parsers (markdown, pdf, docx, epub, html, code, ...)
-  indexer/           Source indexers (obsidian, email, calibre, rss, git, project)
+  indexer/           Source indexers, shared batching, pruning
   mcp/               MCP server (tools, SSE, stdio)
   gui/               Fyne menu bar app, settings, log viewer
+configs/
+  config.example.json  Annotated configuration template
+docs/                Architecture, hybrid search/RRF, Ollama, eM Client schema
 scripts/
   build-app.sh       Create macOS .app bundle
   build-dmg.sh       Create DMG installer
+.github/workflows/
+  release.yml        Tagged release build
 ```
+
+Deeper notes live in [`docs/`](docs/): [architecture](docs/architecture.md), [hybrid search and RRF](docs/hybrid-search-and-rrf.md), [Ollama and embeddings](docs/ollama-and-embeddings.md), [eM Client schema](docs/emclient-schema.md).
 
 ## License
 
