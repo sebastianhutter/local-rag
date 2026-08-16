@@ -25,13 +25,37 @@ import (
 )
 
 // getOrCreate wraps db.GetOrCreateCollection for convenience.
-func getOrCreate(conn *sql.DB, name, collType string) int64 {
+//
+// The error is returned rather than swallowed: a zero ID would otherwise be
+// used as a collection_id and quietly file documents under a collection that
+// does not exist.
+func getOrCreate(conn *sql.DB, name, collType string) (int64, error) {
 	id, err := db.GetOrCreateCollection(conn, name, collType, nil, nil)
 	if err != nil {
 		slog.Error("failed to get/create collection", "name", name, "err", err)
-		return 0
+		return 0, err
 	}
-	return id
+	return id, nil
+}
+
+// failedResult builds a one-error result for a run that could not start.
+func failedResult(err error) *IndexResult {
+	return &IndexResult{Errors: 1, ErrorMessages: []string{err.Error()}}
+}
+
+// CheckNameConflict fails if this collection name is claimed by more than one
+// config section. Collection names are unique, so indexing under an ambiguous
+// name would merge two unrelated corpora into one collection.
+//
+// Only the ambiguous collection is refused — everything else still indexes.
+func CheckNameConflict(cfg *config.Config, name string) error {
+	for _, c := range cfg.CollectionNameConflicts() {
+		if c.Name == name {
+			return fmt.Errorf(
+				"collection name conflict: %s — rename one of them in config, then index it under the new name", c)
+		}
+	}
+	return nil
 }
 
 // embed wraps embeddings.GetEmbeddings for convenience.
@@ -499,10 +523,15 @@ func deleteSource(conn *sql.DB, collectionID int64, sourcePath string) {
 
 // IndexProject indexes documents from file paths into a named project collection.
 func IndexProject(conn *sql.DB, cfg *config.Config, collectionName string, paths []string, force bool, progress ProgressCallback) *IndexResult {
+	if err := CheckNameConflict(cfg, collectionName); err != nil {
+		slog.Error("refusing to index", "name", collectionName, "err", err)
+		return failedResult(err)
+	}
+
 	collectionID, err := db.GetOrCreateCollection(conn, collectionName, "project", nil, nil)
 	if err != nil {
 		slog.Error("failed to get/create collection", "name", collectionName, "err", err)
-		return &IndexResult{Errors: 1, ErrorMessages: []string{err.Error()}}
+		return failedResult(err)
 	}
 
 	files := collectFiles(paths, cfg.SkipCloudPlaceholders)

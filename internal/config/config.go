@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -86,6 +87,62 @@ func (c *Config) IsCollectionEnabled(name string) bool {
 // ExpandedDBPath returns the db_path with ~ expanded.
 func (c *Config) ExpandedDBPath() string {
 	return expandPath(c.DBPath)
+}
+
+// systemCollections are the reserved names owned by the built-in indexers.
+var systemCollections = []string{"obsidian", "email", "calibre", "rss"}
+
+// NameConflict is a collection name claimed by more than one source.
+type NameConflict struct {
+	Name  string
+	Kinds []string // e.g. ["repositories", "projects"]
+}
+
+func (c NameConflict) String() string {
+	return fmt.Sprintf("%q is configured under %s", c.Name, strings.Join(c.Kinds, " and "))
+}
+
+// CollectionNameConflicts reports names claimed by more than one source.
+//
+// Collection names are unique in the database, so a name used by both a
+// repository and a project resolves to a single collection and merges two
+// unrelated corpora — indexing both looks like it works while the collections
+// list shows one entry. Renaming one of them is the fix.
+func (c *Config) CollectionNameConflicts() []NameConflict {
+	kinds := map[string][]string{}
+	add := func(name, kind string) {
+		for _, k := range kinds[name] {
+			if k == kind {
+				return
+			}
+		}
+		kinds[name] = append(kinds[name], kind)
+	}
+
+	for name := range c.Repositories {
+		add(name, "repositories")
+	}
+	for name := range c.Projects {
+		add(name, "projects")
+	}
+	for _, name := range systemCollections {
+		if _, isRepo := c.Repositories[name]; isRepo {
+			add(name, "system collections")
+		}
+		if _, isProject := c.Projects[name]; isProject {
+			add(name, "system collections")
+		}
+	}
+
+	var conflicts []NameConflict
+	for name, ks := range kinds {
+		if len(ks) > 1 {
+			sort.Strings(ks)
+			conflicts = append(conflicts, NameConflict{Name: name, Kinds: ks})
+		}
+	}
+	sort.Slice(conflicts, func(i, j int) bool { return conflicts[i].Name < conflicts[j].Name })
+	return conflicts
 }
 
 // Load reads configuration from the given path (or the default) and returns
@@ -169,6 +226,11 @@ func Load(path string) (*Config, error) {
 				}
 			}
 		}
+	}
+
+	for _, conflict := range cfg.CollectionNameConflicts() {
+		slog.Warn("collection name conflict: indexing will fail until one is renamed",
+			"conflict", conflict.String())
 	}
 
 	slog.Info("loaded config", "path", path)

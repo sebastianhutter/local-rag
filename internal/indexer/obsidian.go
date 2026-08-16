@@ -20,7 +20,10 @@ var obsidianSkipDirs = map[string]bool{
 
 // IndexObsidian indexes all supported files in Obsidian vaults.
 func IndexObsidian(conn *sql.DB, cfg *config.Config, force bool, progress ProgressCallback) *IndexResult {
-	collectionID := getOrCreate(conn, "obsidian", "system")
+	collectionID, err := getOrCreate(conn, "obsidian", "system")
+	if err != nil {
+		return failedResult(err)
+	}
 
 	excludeFolders := make(map[string]bool)
 	for _, f := range cfg.ObsidianExcludeFolders {

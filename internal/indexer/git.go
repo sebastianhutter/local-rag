@@ -71,6 +71,11 @@ type FileChange struct {
 func IndexGitRepo(conn *sql.DB, cfg *config.Config, repoPath, collectionName string, force, indexHistory bool, progress ProgressCallback) *IndexResult {
 	repoPath, _ = filepath.Abs(repoPath)
 
+	if err := CheckNameConflict(cfg, collectionName); err != nil {
+		slog.Error("refusing to index", "name", collectionName, "err", err)
+		return failedResult(err)
+	}
+
 	if !isGitRepo(repoPath) {
 		slog.Error("not a git repository", "path", repoPath)
 		return &IndexResult{Errors: 1, ErrorMessages: []string{"not a git repository"}}
@@ -83,7 +88,10 @@ func IndexGitRepo(conn *sql.DB, cfg *config.Config, repoPath, collectionName str
 	}
 	slog.Info("git repo", "path", repoPath, "HEAD", headSHA[:12])
 
-	collectionID := getOrCreate(conn, collectionName, "code")
+	collectionID, err := getOrCreate(conn, collectionName, "code")
+	if err != nil {
+		return failedResult(err)
+	}
 
 	// Read existing watermarks
 	var desc sql.NullString

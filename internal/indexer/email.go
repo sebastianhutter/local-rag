@@ -43,7 +43,10 @@ func IndexEmails(conn *sql.DB, cfg *config.Config, force bool, progress Progress
 
 	slog.Info("found eM Client accounts", "count", len(accountDirs))
 
-	collectionID := getOrCreate(conn, "email", "system")
+	collectionID, err := getOrCreate(conn, "email", "system")
+	if err != nil {
+		return failedResult(err)
+	}
 
 	// Determine watermark for incremental indexing
 	var sinceDate string

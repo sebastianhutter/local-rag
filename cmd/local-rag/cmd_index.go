@@ -240,6 +240,14 @@ var indexCodeCmd = &cobra.Command{
 				continue
 			}
 
+			// Checked once per collection rather than per repo, so an ambiguous
+			// name is reported once instead of once for each repo in it.
+			if err := indexer.CheckNameConflict(cfg, repoName); err != nil {
+				slog.Error("refusing to index", "name", repoName, "err", err)
+				fmt.Printf("%s: skipped — %v\n", repoName, err)
+				continue
+			}
+
 			autoPrune(conn, cfg, repoName)
 			repos := indexer.ResolveRepoPaths(cfg.Repositories[repoName])
 			for _, repoPath := range repos {

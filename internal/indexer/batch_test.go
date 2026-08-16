@@ -155,7 +155,7 @@ func TestItemBatcherEmptyInput(t *testing.T) {
 // run's totals still add up.
 func TestWriteItemBatchEmbedError(t *testing.T) {
 	conn := setupTestDB(t)
-	collID := getOrCreate(conn, "rss", "system")
+	collID := mustGetOrCreate(t, conn, "rss", "system")
 
 	b := &itemBatch{
 		items: makeItems(3, 1),
@@ -177,7 +177,7 @@ func TestWriteItemBatchEmbedError(t *testing.T) {
 // mismatched embeddings.
 func TestWriteItemBatchVectorCountMismatch(t *testing.T) {
 	conn := setupTestDB(t)
-	collID := getOrCreate(conn, "rss", "system")
+	collID := mustGetOrCreate(t, conn, "rss", "system")
 
 	b := collectBatches(makeItems(2, 1), testBatchConfig(32))[0]
 	b.vecs = [][]float32{make([]float32, 1024)} // one vector, two texts
@@ -203,7 +203,7 @@ func TestWriteItemBatchVectorCountMismatch(t *testing.T) {
 // whole point of tracking offsets through the batch.
 func TestWriteItemBatchStoresPerItemRows(t *testing.T) {
 	conn := setupTestDB(t)
-	collID := getOrCreate(conn, "email", "system")
+	collID := mustGetOrCreate(t, conn, "email", "system")
 
 	items := makeItems(3, 2)
 	items[1].Metadata = map[string]any{"sender": "someone@example.com"}
@@ -247,7 +247,7 @@ func TestWriteItemBatchStoresPerItemRows(t *testing.T) {
 // Re-indexing an item replaces it rather than accumulating duplicates.
 func TestStoreItemReplacesExisting(t *testing.T) {
 	conn := setupTestDB(t)
-	collID := getOrCreate(conn, "rss", "system")
+	collID := mustGetOrCreate(t, conn, "rss", "system")
 
 	item := makeItems(1, 2)[0]
 	vecs := [][]float32{make([]float32, 1024), make([]float32, 1024)}

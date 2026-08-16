@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -272,7 +273,18 @@ func DeleteEmbeddings(conn *sql.DB, documentIDs []any) error {
 	return nil
 }
 
-// GetOrCreateCollection returns the ID of an existing collection or creates a new one.
+// ErrCollectionTypeConflict is returned when a collection name is already in
+// use by a different kind of source.
+//
+// Collection names are unique, so a name configured under both `repositories`
+// and `projects` would otherwise resolve to the same row and silently merge two
+// unrelated corpora into one collection — indexing both appears to succeed, and
+// the collections list shows a single entry of whichever type got there first.
+var ErrCollectionTypeConflict = errors.New("collection name already used by a different source type")
+
+// GetOrCreateCollection returns the ID of an existing collection or creates a
+// new one. It fails with ErrCollectionTypeConflict rather than reuse a
+// collection that belongs to a different source type.
 func GetOrCreateCollection(db *sql.DB, name, collectionType string, description *string, paths []string) (int64, error) {
 	var pathsJSON *string
 	if len(paths) > 0 {
@@ -285,8 +297,14 @@ func GetOrCreateCollection(db *sql.DB, name, collectionType string, description 
 	}
 
 	var id int64
-	err := db.QueryRow("SELECT id FROM collections WHERE name = ?", name).Scan(&id)
+	var existingType string
+	err := db.QueryRow("SELECT id, collection_type FROM collections WHERE name = ?", name).Scan(&id, &existingType)
 	if err == nil {
+		if existingType != collectionType {
+			return 0, fmt.Errorf(
+				"%w: %q exists as %q but is being indexed as %q — rename one of them in config",
+				ErrCollectionTypeConflict, name, existingType, collectionType)
+		}
 		// Collection exists — update paths if provided.
 		if pathsJSON != nil {
 			if _, err := db.Exec("UPDATE collections SET paths = ? WHERE id = ?", *pathsJSON, id); err != nil {

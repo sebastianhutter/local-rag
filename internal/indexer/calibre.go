@@ -20,7 +20,10 @@ var preferredFormats = []string{"EPUB", "PDF"}
 
 // IndexCalibre indexes ebooks from Calibre libraries into the "calibre" collection.
 func IndexCalibre(conn *sql.DB, cfg *config.Config, force bool, progress ProgressCallback) *IndexResult {
-	collectionID := getOrCreate(conn, "calibre", "system")
+	collectionID, err := getOrCreate(conn, "calibre", "system")
+	if err != nil {
+		return failedResult(err)
+	}
 
 	type bookEntry struct {
 		libraryPath string

@@ -8,6 +8,46 @@ import (
 	"testing"
 )
 
+// A name shared by a repository and a project resolves to one collection row,
+// silently merging two corpora — so the conflict has to be reported.
+func TestCollectionNameConflicts(t *testing.T) {
+	cfg := &Config{
+		Repositories: map[string][]string{"rustyquill": {"/repo"}, "copebit": {"/repo2"}},
+		Projects:     map[string][]string{"rustyquill": {"/docs"}, "research": {"/papers"}},
+	}
+
+	conflicts := cfg.CollectionNameConflicts()
+	if len(conflicts) != 1 {
+		t.Fatalf("got %d conflicts, want 1: %v", len(conflicts), conflicts)
+	}
+	if conflicts[0].Name != "rustyquill" {
+		t.Errorf("conflict name = %q, want rustyquill", conflicts[0].Name)
+	}
+	if got := conflicts[0].String(); !strings.Contains(got, "repositories") || !strings.Contains(got, "projects") {
+		t.Errorf("message should name both kinds, got %q", got)
+	}
+}
+
+// A repository or project may not shadow a built-in collection either.
+func TestCollectionNameConflictsWithSystem(t *testing.T) {
+	cfg := &Config{Projects: map[string][]string{"obsidian": {"/docs"}}}
+
+	conflicts := cfg.CollectionNameConflicts()
+	if len(conflicts) != 1 || conflicts[0].Name != "obsidian" {
+		t.Fatalf("expected an obsidian conflict, got %v", conflicts)
+	}
+}
+
+func TestCollectionNameConflictsNone(t *testing.T) {
+	cfg := &Config{
+		Repositories: map[string][]string{"code": {"/repo"}},
+		Projects:     map[string][]string{"docs": {"/docs"}},
+	}
+	if got := cfg.CollectionNameConflicts(); len(got) != 0 {
+		t.Errorf("got %v, want no conflicts", got)
+	}
+}
+
 // Save() overlays a fixed list of keys, so a new option that is not added there
 // loads correctly but is silently dropped the first time the GUI saves settings.
 func TestNewOptionsRoundTrip(t *testing.T) {

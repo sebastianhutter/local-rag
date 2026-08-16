@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -24,6 +25,48 @@ func setupTestDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { conn.Close() })
 	return conn
+}
+
+func mustGetOrCreate(t *testing.T, conn *sql.DB, name, collType string) int64 {
+	t.Helper()
+	id, err := getOrCreate(conn, name, collType)
+	if err != nil {
+		t.Fatalf("getOrCreate(%q, %q): %v", name, collType, err)
+	}
+	return id
+}
+
+// A name already used by one kind of source must not be silently reused by
+// another: collection names are unique, so reuse merges two unrelated corpora
+// into one collection and the merge is invisible afterwards.
+func TestGetOrCreateRejectsTypeConflict(t *testing.T) {
+	conn := setupTestDB(t)
+
+	codeID := mustGetOrCreate(t, conn, "rustyquill", "code")
+
+	projectID, err := getOrCreate(conn, "rustyquill", "project")
+	if err == nil {
+		t.Fatal("indexing a project into an existing code collection should fail")
+	}
+	if !errors.Is(err, db.ErrCollectionTypeConflict) {
+		t.Errorf("got %v, want ErrCollectionTypeConflict", err)
+	}
+	if projectID != 0 {
+		t.Errorf("got id %d on conflict, want 0", projectID)
+	}
+
+	// The existing collection is left untouched.
+	var gotType string
+	conn.QueryRow("SELECT collection_type FROM collections WHERE id = ?", codeID).Scan(&gotType)
+	if gotType != "code" {
+		t.Errorf("existing collection type = %q, want it unchanged", gotType)
+	}
+
+	var rows int
+	conn.QueryRow("SELECT COUNT(*) FROM collections WHERE name = 'rustyquill'").Scan(&rows)
+	if rows != 1 {
+		t.Errorf("got %d rows named rustyquill, want 1", rows)
+	}
 }
 
 func TestFileHash(t *testing.T) {
@@ -100,19 +143,19 @@ func TestCollectFiles(t *testing.T) {
 func TestGetOrCreate(t *testing.T) {
 	conn := setupTestDB(t)
 
-	id1 := getOrCreate(conn, "test-collection", "project")
+	id1 := mustGetOrCreate(t, conn, "test-collection", "project")
 	if id1 == 0 {
 		t.Fatal("expected non-zero collection ID")
 	}
 
 	// Same name returns same ID
-	id2 := getOrCreate(conn, "test-collection", "project")
+	id2 := mustGetOrCreate(t, conn, "test-collection", "project")
 	if id1 != id2 {
 		t.Errorf("same name should return same id: %d != %d", id1, id2)
 	}
 
 	// Different name returns different ID
-	id3 := getOrCreate(conn, "other-collection", "system")
+	id3 := mustGetOrCreate(t, conn, "other-collection", "system")
 	if id3 == id1 {
 		t.Error("different name should return different ID")
 	}
@@ -120,7 +163,7 @@ func TestGetOrCreate(t *testing.T) {
 
 func TestUpsertSource(t *testing.T) {
 	conn := setupTestDB(t)
-	collID := getOrCreate(conn, "test", "project")
+	collID := mustGetOrCreate(t, conn, "test", "project")
 
 	// First insert
 	id1, err := upsertSource(conn, collID, "/path/to/file.md", "markdown", "abc123", "2025-01-01T00:00:00Z")
@@ -150,7 +193,7 @@ func TestUpsertSource(t *testing.T) {
 
 func TestIsSourceUnchanged(t *testing.T) {
 	conn := setupTestDB(t)
-	collID := getOrCreate(conn, "test", "project")
+	collID := mustGetOrCreate(t, conn, "test", "project")
 
 	upsertSource(conn, collID, "/file.md", "markdown", "hash123", "")
 
@@ -167,7 +210,7 @@ func TestIsSourceUnchanged(t *testing.T) {
 
 func TestIsSourceCurrent(t *testing.T) {
 	conn := setupTestDB(t)
-	collID := getOrCreate(conn, "test", "project")
+	collID := mustGetOrCreate(t, conn, "test", "project")
 
 	upsertSource(conn, collID, "/file.md", "markdown", "hash123", "2026-01-01T00:00:00Z")
 
@@ -195,7 +238,7 @@ func TestIndexSingleFileSkipsUnchangedWithoutReading(t *testing.T) {
 	}
 
 	conn := setupTestDB(t)
-	collID := getOrCreate(conn, "test", "project")
+	collID := mustGetOrCreate(t, conn, "test", "project")
 
 	path := filepath.Join(t.TempDir(), "note.md")
 	if err := os.WriteFile(path, []byte("# hello"), 0o644); err != nil {
@@ -241,7 +284,7 @@ func TestCollectFilesSkipPlaceholders(t *testing.T) {
 
 func TestIsSourceExists(t *testing.T) {
 	conn := setupTestDB(t)
-	collID := getOrCreate(conn, "test", "project")
+	collID := mustGetOrCreate(t, conn, "test", "project")
 
 	if isSourceExists(conn, collID, "msg-id-1") {
 		t.Error("source should not exist yet")
@@ -259,7 +302,7 @@ func TestIsSourceExists(t *testing.T) {
 
 func TestDeleteOldDocs(t *testing.T) {
 	conn := setupTestDB(t)
-	collID := getOrCreate(conn, "test", "project")
+	collID := mustGetOrCreate(t, conn, "test", "project")
 
 	res, _ := conn.Exec(
 		"INSERT INTO sources (collection_id, source_type, source_path, last_indexed_at) VALUES (?, 'markdown', '/file.md', datetime('now'))",

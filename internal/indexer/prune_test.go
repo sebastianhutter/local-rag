@@ -10,7 +10,7 @@ import (
 
 func TestPruneFileSources(t *testing.T) {
 	conn := setupTestDB(t)
-	collID := getOrCreate(conn, "obsidian", "system")
+	collID := mustGetOrCreate(t, conn, "obsidian", "system")
 
 	tmpDir := t.TempDir()
 
@@ -56,7 +56,7 @@ func TestPruneFileSources(t *testing.T) {
 
 func TestDeleteSourceByID(t *testing.T) {
 	conn := setupTestDB(t)
-	collID := getOrCreate(conn, "test", "project")
+	collID := mustGetOrCreate(t, conn, "test", "project")
 
 	// Insert source
 	res, _ := conn.Exec(
@@ -97,7 +97,7 @@ func TestDeleteSourceByID(t *testing.T) {
 
 func TestPruneSkipsURISources(t *testing.T) {
 	conn := setupTestDB(t)
-	collID := getOrCreate(conn, "calibre", "system")
+	collID := mustGetOrCreate(t, conn, "calibre", "system")
 
 	// Insert a calibre:// URI source
 	conn.Exec(
@@ -131,7 +131,7 @@ func TestPruneSkipsURISources(t *testing.T) {
 
 func TestSourcesForCollection(t *testing.T) {
 	conn := setupTestDB(t)
-	collID := getOrCreate(conn, "test", "project")
+	collID := mustGetOrCreate(t, conn, "test", "project")
 
 	conn.Exec(
 		"INSERT INTO sources (collection_id, source_type, source_path, last_indexed_at) VALUES (?, 'markdown', '/a.md', datetime('now'))",
@@ -183,7 +183,7 @@ func TestPruneCollectionNonexistent(t *testing.T) {
 
 func TestPruneCodeSkipsCommits(t *testing.T) {
 	conn := setupTestDB(t)
-	collID := getOrCreate(conn, "code-group", "code")
+	collID := mustGetOrCreate(t, conn, "code-group", "code")
 	cfg := &config.Config{GitHistoryInMonths: 6}
 
 	// Insert a commit source (git:// URI)

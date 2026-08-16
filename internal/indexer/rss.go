@@ -36,7 +36,10 @@ func IndexRSS(conn *sql.DB, cfg *config.Config, force bool, progress ProgressCal
 
 	slog.Info("found NetNewsWire accounts", "count", len(accountDirs))
 
-	collectionID := getOrCreate(conn, "rss", "system")
+	collectionID, err := getOrCreate(conn, "rss", "system")
+	if err != nil {
+		return failedResult(err)
+	}
 
 	var sinceTS float64
 	if !force {
