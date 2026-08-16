@@ -355,6 +355,116 @@ func ClearSourcesWithPrefix(conn *sql.DB, collectionID int64, prefixes []string)
 	return tx.Commit()
 }
 
+// OrphanedVectorStats reports vectors that no longer belong to any document.
+type OrphanedVectorStats struct {
+	Documents int
+	Vectors   int
+	Orphaned  int
+}
+
+// CountOrphanedVectors reports embeddings whose document no longer exists.
+//
+// Deleting a source cascades to its documents, but the vec0 tables have no
+// foreign keys, so any path that removed documents without explicitly clearing
+// their embeddings left them behind. Orphans are not merely wasted space: the
+// binary-quantized KNN returns them as candidates that then resolve to no
+// document, shrinking the effective result pool for every search.
+func CountOrphanedVectors(conn *sql.DB) (OrphanedVectorStats, error) {
+	var st OrphanedVectorStats
+	if err := conn.QueryRow("SELECT COUNT(*) FROM documents").Scan(&st.Documents); err != nil {
+		return st, fmt.Errorf("count documents: %w", err)
+	}
+	if err := conn.QueryRow("SELECT COUNT(*) FROM vec_documents").Scan(&st.Vectors); err != nil {
+		return st, fmt.Errorf("count vectors: %w", err)
+	}
+
+	ids, err := orphanedVectorRowIDs(conn)
+	if err != nil {
+		return st, err
+	}
+	st.Orphaned = len(ids)
+	return st, nil
+}
+
+// orphanedVectorRowIDs returns the rowids of vec_documents rows whose
+// document_id is absent from the documents table.
+func orphanedVectorRowIDs(conn *sql.DB) ([]int64, error) {
+	live := make(map[int64]struct{})
+	rows, err := conn.Query("SELECT id FROM documents")
+	if err != nil {
+		return nil, fmt.Errorf("list documents: %w", err)
+	}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err == nil {
+			live[id] = struct{}{}
+		}
+	}
+	rows.Close()
+
+	var orphans []int64
+	rows, err = conn.Query("SELECT rowid, document_id FROM vec_documents")
+	if err != nil {
+		return nil, fmt.Errorf("list vectors: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rowid, docID int64
+		if err := rows.Scan(&rowid, &docID); err != nil {
+			continue
+		}
+		if _, ok := live[docID]; !ok {
+			orphans = append(orphans, rowid)
+		}
+	}
+	return orphans, rows.Err()
+}
+
+// DeleteOrphanedVectors removes embeddings whose document no longer exists,
+// returning how many were deleted.
+//
+// Deletion is by rowid, not document_id: rowid is the vec0 primary key, so it
+// resolves directly, whereas filtering on the document_id metadata column
+// full-scans the whole table for every statement. vec_documents_bin shares
+// rowids with vec_documents, so the same ids clear both.
+func DeleteOrphanedVectors(conn *sql.DB) (int, error) {
+	orphans, err := orphanedVectorRowIDs(conn)
+	if err != nil {
+		return 0, err
+	}
+	if len(orphans) == 0 {
+		return 0, nil
+	}
+
+	const chunk = 500
+	deleted := 0
+	for start := 0; start < len(orphans); start += chunk {
+		end := start + chunk
+		if end > len(orphans) {
+			end = len(orphans)
+		}
+		batch := orphans[start:end]
+
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+
+		for _, table := range []string{"vec_documents_bin", "vec_documents"} {
+			if _, err := conn.Exec(
+				"DELETE FROM "+table+" WHERE rowid IN ("+placeholders+")", args...,
+			); err != nil {
+				return deleted, fmt.Errorf("delete orphans from %s: %w", table, err)
+			}
+		}
+		deleted += len(batch)
+	}
+
+	slog.Info("removed orphaned vectors", "count", deleted)
+	return deleted, nil
+}
+
 // ErrCollectionTypeConflict is returned when a collection name is already in
 // use by a different kind of source.
 //
