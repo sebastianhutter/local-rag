@@ -89,8 +89,12 @@ func isHidden(path string) bool {
 	return false
 }
 
-// collectFiles walks directories recursively and collects files with supported extensions.
-func collectFiles(paths []string) []string {
+// collectFiles walks directories recursively and collects files with supported
+// extensions. When skipPlaceholders is true, dataless cloud files are left out:
+// reading one would make macOS download it from the provider first, so a folder
+// that is mostly "online-only" would otherwise turn an index run into a
+// multi-gigabyte download.
+func collectFiles(paths []string, skipPlaceholders bool) []string {
 	var files []string
 	for _, p := range paths {
 		info, err := os.Stat(p)
@@ -100,10 +104,15 @@ func collectFiles(paths []string) []string {
 		}
 		if !info.IsDir() {
 			if !isHidden(p) && parser.SourceTypeForPath(p) != "" {
+				if skipPlaceholders && isCloudPlaceholder(info) {
+					slog.Warn("skipping cloud-only file (not downloaded)", "path", p)
+					continue
+				}
 				files = append(files, p)
 			}
 			continue
 		}
+		var placeholders int
 		filepath.Walk(p, func(fp string, fi os.FileInfo, err error) error {
 			if err != nil {
 				return nil
@@ -114,11 +123,22 @@ func collectFiles(paths []string) []string {
 			if isHidden(fp) {
 				return nil
 			}
-			if parser.SourceTypeForPath(fp) != "" {
-				files = append(files, fp)
+			if parser.SourceTypeForPath(fp) == "" {
+				return nil
 			}
+			if skipPlaceholders && isCloudPlaceholder(fi) {
+				placeholders++
+				slog.Debug("skipping cloud-only file (not downloaded)", "path", fp)
+				return nil
+			}
+			files = append(files, fp)
 			return nil
 		})
+		if placeholders > 0 {
+			slog.Warn("skipped cloud-only files; download them locally to index them "+
+				"(Finder: Always Keep on This Device), or set skip_cloud_placeholders=false",
+				"count", placeholders, "path", p)
+		}
 	}
 	return files
 }
@@ -312,6 +332,29 @@ func insertChunks(conn *sql.DB, sourceID, collectionID int64, chunks []chunker.C
 	return nil
 }
 
+// isSourceCurrent reports whether a source is already indexed at the given
+// modification time.
+//
+// This is a cheap pre-check that runs before hashing. Hashing reads the whole
+// file, which on a cloud-backed folder means downloading it from the provider —
+// so without this, "incremental" indexing still paid full I/O for every
+// unchanged file on every run. mtime alone can be fooled by a deliberately
+// restored timestamp; --force re-reads everything.
+func isSourceCurrent(conn *sql.DB, collectionID int64, sourcePath, mtime string) bool {
+	if mtime == "" {
+		return false
+	}
+	var storedMtime sql.NullString
+	err := conn.QueryRow(
+		"SELECT file_modified_at FROM sources WHERE collection_id = ? AND source_path = ?",
+		collectionID, sourcePath,
+	).Scan(&storedMtime)
+	if err != nil {
+		return false
+	}
+	return storedMtime.Valid && storedMtime.String == mtime
+}
+
 // isSourceUnchanged checks if a source's file hash matches. Returns true if unchanged.
 func isSourceUnchanged(conn *sql.DB, collectionID int64, sourcePath, currentHash string) bool {
 	var storedHash sql.NullString
@@ -328,6 +371,20 @@ func isSourceUnchanged(conn *sql.DB, collectionID int64, sourcePath, currentHash
 // indexSingleFile indexes one file into a collection. Returns true if indexed, false if skipped.
 func indexSingleFile(conn *sql.DB, cfg *config.Config, filePath string, collectionID int64, force bool) (bool, error) {
 	absPath, _ := filepath.Abs(filePath)
+
+	info, statErr := os.Stat(filePath)
+	mtime := ""
+	if statErr == nil {
+		mtime = info.ModTime().UTC().Format(time.RFC3339)
+	}
+
+	// Stat-level check first: an unchanged file is skipped without ever being
+	// opened, which matters most for cloud-backed files where a read is a
+	// download.
+	if !force && isSourceCurrent(conn, collectionID, absPath, mtime) {
+		return false, nil
+	}
+
 	fh, err := fileHash(filePath)
 	if err != nil {
 		return false, fmt.Errorf("hash %s: %w", filePath, err)
@@ -339,7 +396,14 @@ func indexSingleFile(conn *sql.DB, cfg *config.Config, filePath string, collecti
 		sourceType = "plaintext"
 	}
 
+	// mtime moved but the content may still be identical (touch, re-sync,
+	// metadata-only change) — the hash decides whether we re-embed.
 	if !force && isSourceUnchanged(conn, collectionID, absPath, fh) {
+		// Record the new mtime so the cheap check succeeds next run.
+		conn.Exec(
+			"UPDATE sources SET file_modified_at = ?, last_indexed_at = ? WHERE collection_id = ? AND source_path = ?",
+			mtime, time.Now().UTC().Format(time.RFC3339), collectionID, absPath,
+		)
 		return false, nil
 	}
 
@@ -351,12 +415,6 @@ func indexSingleFile(conn *sql.DB, cfg *config.Config, filePath string, collecti
 	}
 
 	slog.Debug("embedding chunks", "path", filepath.Base(filePath), "chunks", len(chunks))
-
-	info, _ := os.Stat(filePath)
-	mtime := ""
-	if info != nil {
-		mtime = info.ModTime().UTC().Format(time.RFC3339)
-	}
 
 	sourceID, err := upsertSource(conn, collectionID, absPath, sourceType, fh, mtime)
 	if err != nil {
@@ -447,7 +505,7 @@ func IndexProject(conn *sql.DB, cfg *config.Config, collectionName string, paths
 		return &IndexResult{Errors: 1, ErrorMessages: []string{err.Error()}}
 	}
 
-	files := collectFiles(paths)
+	files := collectFiles(paths, cfg.SkipCloudPlaceholders)
 	result := &IndexResult{TotalFound: len(files)}
 
 	slog.Info("project indexer: found files", "count", len(files), "collection", collectionName)

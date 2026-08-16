@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/sebastianhutter/local-rag-go/internal/config"
 	"github.com/sebastianhutter/local-rag-go/internal/db"
 )
 
@@ -82,7 +84,7 @@ func TestCollectFiles(t *testing.T) {
 	os.MkdirAll(filepath.Join(tmpDir, "sub"), 0o755)
 	os.WriteFile(filepath.Join(tmpDir, "sub", "note.md"), []byte("note"), 0o644)
 
-	files := collectFiles([]string{tmpDir})
+	files := collectFiles([]string{tmpDir}, true)
 	if len(files) < 3 {
 		t.Errorf("expected at least 3 files, got %d: %v", len(files), files)
 	}
@@ -160,6 +162,80 @@ func TestIsSourceUnchanged(t *testing.T) {
 	}
 	if isSourceUnchanged(conn, collID, "/nonexistent.md", "hash123") {
 		t.Error("nonexistent source should not be unchanged")
+	}
+}
+
+func TestIsSourceCurrent(t *testing.T) {
+	conn := setupTestDB(t)
+	collID := getOrCreate(conn, "test", "project")
+
+	upsertSource(conn, collID, "/file.md", "markdown", "hash123", "2026-01-01T00:00:00Z")
+
+	if !isSourceCurrent(conn, collID, "/file.md", "2026-01-01T00:00:00Z") {
+		t.Error("source should be current with same mtime")
+	}
+	if isSourceCurrent(conn, collID, "/file.md", "2026-06-01T00:00:00Z") {
+		t.Error("source should not be current with a newer mtime")
+	}
+	if isSourceCurrent(conn, collID, "/nonexistent.md", "2026-01-01T00:00:00Z") {
+		t.Error("nonexistent source should not be current")
+	}
+	if isSourceCurrent(conn, collID, "/file.md", "") {
+		t.Error("unknown mtime should never count as current")
+	}
+}
+
+// An unchanged file must be skipped on the strength of its mtime alone, without
+// the file ever being opened. On cloud storage opening it means downloading it,
+// so this is the difference between a fast re-index and a multi-gigabyte pull.
+// Making the file unreadable proves no read is attempted.
+func TestIndexSingleFileSkipsUnchangedWithoutReading(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: chmod 000 would not block reads")
+	}
+
+	conn := setupTestDB(t)
+	collID := getOrCreate(conn, "test", "project")
+
+	path := filepath.Join(t.TempDir(), "note.md")
+	if err := os.WriteFile(path, []byte("# hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	absPath, _ := filepath.Abs(path)
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mtime := info.ModTime().UTC().Format(time.RFC3339)
+	upsertSource(conn, collID, absPath, "markdown", "somehash", mtime)
+
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(path, 0o644) })
+
+	indexed, err := indexSingleFile(conn, &config.Config{}, path, collID, false)
+	if err != nil {
+		t.Fatalf("unchanged file should be skipped without reading it, got error: %v", err)
+	}
+	if indexed {
+		t.Error("unchanged file should not be re-indexed")
+	}
+}
+
+func TestCollectFilesSkipPlaceholders(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.WriteFile(filepath.Join(tmpDir, "readme.md"), []byte("# hello"), 0o644)
+
+	// Ordinary local files are returned regardless of the setting; only
+	// dataless cloud placeholders are affected, and those cannot be created
+	// synthetically (SF_DATALESS is a super-user flag set by the File Provider).
+	for _, skip := range []bool{true, false} {
+		files := collectFiles([]string{tmpDir}, skip)
+		if len(files) != 1 {
+			t.Errorf("skipPlaceholders=%v: got %d files, want 1", skip, len(files))
+		}
 	}
 }
 

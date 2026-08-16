@@ -4,8 +4,60 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// Save() overlays a fixed list of keys, so a new option that is not added there
+// loads correctly but is silently dropped the first time the GUI saves settings.
+func TestNewOptionsRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+
+	// Absent from the file: defaults apply. skip_cloud_placeholders defaults to
+	// true, which a plain zero value would get wrong.
+	os.WriteFile(path, []byte(`{"embedding_model":"bge-m3"}`), 0o644)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.SkipCloudPlaceholders {
+		t.Error("skip_cloud_placeholders should default to true when absent")
+	}
+	if cfg.EmbeddingWorkers != 4 {
+		t.Errorf("embedding_workers = %d, want 4", cfg.EmbeddingWorkers)
+	}
+
+	// An explicit false must not be overwritten by the default.
+	os.WriteFile(path, []byte(`{"skip_cloud_placeholders":false,"embedding_workers":8}`), 0o644)
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SkipCloudPlaceholders {
+		t.Error("explicit false should be honoured")
+	}
+
+	if err := Save(cfg, path); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	for _, key := range []string{"skip_cloud_placeholders", "embedding_workers"} {
+		if !strings.Contains(string(data), key) {
+			t.Errorf("Save() did not write %q:\n%s", key, data)
+		}
+	}
+
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.SkipCloudPlaceholders {
+		t.Error("skip_cloud_placeholders did not survive save/load")
+	}
+	if reloaded.EmbeddingWorkers != 8 {
+		t.Errorf("embedding_workers = %d after round trip, want 8", reloaded.EmbeddingWorkers)
+	}
+}
 
 func TestDefaults(t *testing.T) {
 	cfg := defaults()

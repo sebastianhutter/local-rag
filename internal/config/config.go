@@ -49,6 +49,7 @@ type Config struct {
 	EmbeddingDimensions       int                 `json:"embedding_dimensions"`
 	EmbeddingHosts            []string            `json:"embedding_hosts"`
 	EmbeddingBatchSize        int                 `json:"embedding_batch_size"`
+	EmbeddingWorkers          int                 `json:"embedding_workers"`
 	ChunkSizeTokens           int                 `json:"chunk_size_tokens"`
 	ChunkOverlapTokens        int                 `json:"chunk_overlap_tokens"`
 	ObsidianVaults            []string            `json:"obsidian_vaults"`
@@ -59,6 +60,7 @@ type Config struct {
 	Repositories              map[string][]string `json:"repositories"`
 	Projects                  map[string][]string `json:"projects"`
 	DisabledCollections       []string            `json:"disabled_collections"`
+	SkipCloudPlaceholders     bool                `json:"skip_cloud_placeholders"`
 	GitHistoryInMonths        int                 `json:"git_history_in_months"`
 	GitCommitSubjectBlacklist []string            `json:"git_commit_subject_blacklist"`
 	SearchDefaults            SearchDefaults      `json:"search_defaults"`
@@ -192,6 +194,7 @@ func Save(cfg *Config, path string) error {
 	existing["embedding_dimensions"] = cfg.EmbeddingDimensions
 	existing["embedding_hosts"] = cfg.EmbeddingHosts
 	existing["embedding_batch_size"] = cfg.EmbeddingBatchSize
+	existing["embedding_workers"] = cfg.EmbeddingWorkers
 	existing["chunk_size_tokens"] = cfg.ChunkSizeTokens
 	existing["chunk_overlap_tokens"] = cfg.ChunkOverlapTokens
 	existing["obsidian_vaults"] = cfg.ObsidianVaults
@@ -202,6 +205,7 @@ func Save(cfg *Config, path string) error {
 	existing["repositories"] = cfg.Repositories
 	existing["projects"] = cfg.Projects
 	existing["disabled_collections"] = cfg.DisabledCollections
+	existing["skip_cloud_placeholders"] = cfg.SkipCloudPlaceholders
 	existing["git_history_in_months"] = cfg.GitHistoryInMonths
 	existing["git_commit_subject_blacklist"] = cfg.GitCommitSubjectBlacklist
 	existing["search_defaults"] = cfg.SearchDefaults
@@ -234,6 +238,7 @@ func defaults() *Config {
 		EmbeddingModel:         "bge-m3",
 		EmbeddingDimensions:    1024,
 		EmbeddingBatchSize:     32,
+		EmbeddingWorkers:       4,
 		ChunkSizeTokens:        500,
 		ChunkOverlapTokens:     50,
 		ObsidianVaults:         []string{},
@@ -246,6 +251,7 @@ func defaults() *Config {
 		Repositories:              make(map[string][]string),
 		Projects:                  make(map[string][]string),
 		DisabledCollections:       []string{},
+		SkipCloudPlaceholders:     true,
 		GitHistoryInMonths:        6,
 		GitCommitSubjectBlacklist: []string{},
 		SearchDefaults: SearchDefaults{

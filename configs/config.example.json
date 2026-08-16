@@ -2,6 +2,12 @@
     "db_path": "~/.local-rag/rag.db",
     "embedding_model": "bge-m3",
     "embedding_dimensions": 1024,
+    "embedding_hosts": [
+        "http://192.168.1.10:11434",
+        "http://127.0.0.1:11434"
+    ],
+    "embedding_batch_size": 32,
+    "embedding_workers": 4,
     "chunk_size_tokens": 500,
     "chunk_overlap_tokens": 50,
     "obsidian_vaults": [
@@ -26,7 +32,17 @@
             "~/Repository/other-org/tf-modules"
         ]
     },
+    "projects": {
+        "client-docs": [
+            "~/Documents/client-project/specs",
+            "~/Documents/client-project/notes"
+        ],
+        "research": [
+            "~/Documents/research-papers"
+        ]
+    },
     "disabled_collections": [],
+    "skip_cloud_placeholders": true,
     "git_history_in_months": 6,
     "git_commit_subject_blacklist": [
         "Ignore commit messages beginning with these prefixes"

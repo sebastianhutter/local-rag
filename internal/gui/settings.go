@@ -150,6 +150,15 @@ func (a *App) buildGeneralTab(cfg *config.Config, w fyne.Window) fyne.CanvasObje
 		}
 	}
 
+	workersEntry := widget.NewEntry()
+	workersEntry.SetText(strconv.Itoa(cfg.EmbeddingWorkers))
+	workersEntry.Validator = intValidator(1, 32)
+	workersEntry.OnChanged = func(s string) {
+		if v, err := strconv.Atoi(s); err == nil {
+			cfg.EmbeddingWorkers = v
+		}
+	}
+
 	chunkEntry := widget.NewEntry()
 	chunkEntry.SetText(strconv.Itoa(cfg.ChunkSizeTokens))
 	chunkEntry.Validator = intValidator(50, 10000)
@@ -168,11 +177,21 @@ func (a *App) buildGeneralTab(cfg *config.Config, w fyne.Window) fyne.CanvasObje
 		}
 	}
 
+	// Cloud-storage folders (OneDrive, iCloud Drive, Google Drive, Synology
+	// Drive) can contain files that exist only online. Reading one makes macOS
+	// download it first, so indexing such a folder can take hours and pull down
+	// gigabytes. Skipping is the default.
+	placeholderCheck := widget.NewCheck("Skip files that are not downloaded locally", func(b bool) {
+		cfg.SkipCloudPlaceholders = b
+	})
+	placeholderCheck.SetChecked(cfg.SkipCloudPlaceholders)
+
 	form := widget.NewForm(
 		widget.NewFormItem("Database path", container.NewBorder(nil, nil, nil, dbBrowseBtn, dbPathEntry)),
 		widget.NewFormItem("Embedding model", modelSelect),
 		widget.NewFormItem("Embedding dimensions", dimEntry),
 		widget.NewFormItem("Embedding batch size", batchEntry),
+		widget.NewFormItem("Embedding workers", workersEntry),
 		widget.NewFormItem("Chunk size (tokens)", chunkEntry),
 		widget.NewFormItem("Chunk overlap (tokens)", overlapEntry),
 	)
@@ -183,6 +202,13 @@ func (a *App) buildGeneralTab(cfg *config.Config, w fyne.Window) fyne.CanvasObje
 
 	return container.NewVScroll(container.NewVBox(
 		widget.NewCard("General", "", form),
+		widget.NewCard(
+			"Cloud Storage",
+			"OneDrive, iCloud Drive, Google Drive and Synology Drive can keep files online-only. "+
+				"Indexing one downloads it first, which is slow and uses disk. "+
+				"Uncheck to download and index them anyway.",
+			placeholderCheck,
+		),
 		widget.NewCard(
 			"Ollama Hosts",
 			"Ordered; first reachable host that has the model is used. Empty = local. e.g. http://192.168.30.90:11434",

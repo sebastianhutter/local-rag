@@ -309,6 +309,7 @@ Config file location: `~/.local-rag/config.json`
     "http://127.0.0.1:11434"
   ],
   "embedding_batch_size": 32,
+  "embedding_workers": 4,
   "chunk_size_tokens": 500,
   "chunk_overlap_tokens": 50,
   "obsidian_vaults": [
@@ -332,6 +333,7 @@ Config file location: `~/.local-rag/config.json`
     "research": ["~/Documents/research-papers"]
   },
   "disabled_collections": [],
+  "skip_cloud_placeholders": true,
   "git_history_in_months": 6,
   "git_commit_subject_blacklist": [
     "Automated show, episode and transcript sync"
@@ -355,6 +357,14 @@ Config file location: `~/.local-rag/config.json`
 **`embedding_hosts`** (optional): an ordered list of Ollama endpoints. At startup (index/search/serve/GUI) the first host that is reachable **and already serves `embedding_model`** is selected and exported as `OLLAMA_HOST`; if none qualify it falls back to Ollama's default (localhost). An `OLLAMA_HOST` already set in the environment overrides the list. This lets a fast remote/GPU Ollama be used when available (e.g. for a heavy reindex) and transparently fall back to local otherwise. **All listed hosts must serve the same embedding model** (identical weights) or vectors will be inconsistent with the existing corpus. `index code` / `index all` process collections in sorted (deterministic) order.
 
 **`embedding_batch_size`** (optional, default `32`): number of texts sent per Ollama embedding request. Larger batches keep a GPU host better fed — throughput scales up to ~128 (diminishing returns beyond) — at the cost of more memory per request, so a small/CPU/memory-constrained host may prefer a lower value. All of `embedding_model`, `embedding_hosts`, and `embedding_batch_size` are editable in the menu-bar app under **Settings → General** (embedding batch size field + the *Ollama Hosts* card).
+
+**`embedding_workers`** (optional, default `4`): how many embedding requests are in flight at once. A single request leaves a remote host idle between round trips; several keep a GPU fed. Database writes stay on one goroutine — SQLite takes no concurrent writers — so this only parallelises the network-bound part. Raise it for a fast remote host, set it to `1` to serialise. Editable under **Settings → General**.
+
+RSS (and any source producing few chunks per item) groups *several items* into one embedding request rather than sending one request per item, so `embedding_batch_size` is actually filled. Measured on a full reindex against a remote GPU host, this took the embedding phase from ~85s to ~2.8s per 200 articles (**~30x**); the per-article shape spent nearly all its time on round trips.
+
+**`skip_cloud_placeholders`** (optional, default `true`): skip files that exist only in the cloud. macOS marks on-demand files from OneDrive, iCloud Drive, Google Drive and Synology Drive with the `SF_DATALESS` flag — the name, size and mtime are local but the data is not. Opening one makes macOS download it from the provider first, so indexing a mostly-online folder is bounded by network speed and materialises the files on disk (a OneDrive shared library can be hundreds of GB). Placeholders are stat-ed but never opened, so a skipped file costs nothing; a per-path warning reports how many were skipped. Set to `false` to download and index them anyway, or mark the folders *Always Keep on This Device* in Finder. Editable under **Settings → General** (*Cloud Storage* card). Pruning is unaffected — a placeholder still exists on disk, so previously indexed content is not removed.
+
+Indexing skips unchanged files by comparing the stored `file_modified_at` against the filesystem before hashing. The content hash still decides whether a file is re-embedded, but an untouched file is never opened — without this, every run re-read every file, which on cloud storage meant re-downloading anything the provider had evicted.
 
 ---
 

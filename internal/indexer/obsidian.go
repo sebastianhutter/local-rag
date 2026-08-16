@@ -36,7 +36,7 @@ func IndexObsidian(conn *sql.DB, cfg *config.Config, force bool, progress Progre
 			continue
 		}
 		slog.Info("indexing Obsidian vault", "path", vault)
-		files := walkVault(vault, excludeFolders)
+		files := walkVault(vault, excludeFolders, cfg.SkipCloudPlaceholders)
 		slog.Info("found supported files in vault", "count", len(files), "vault", vault)
 		allFiles = append(allFiles, files...)
 	}
@@ -64,8 +64,9 @@ func IndexObsidian(conn *sql.DB, cfg *config.Config, force bool, progress Progre
 	return result
 }
 
-func walkVault(vaultPath string, excludeFolders map[string]bool) []string {
+func walkVault(vaultPath string, excludeFolders map[string]bool, skipPlaceholders bool) []string {
 	var results []string
+	var placeholders int
 	filepath.Walk(vaultPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
@@ -80,11 +81,22 @@ func walkVault(vaultPath string, excludeFolders map[string]bool) []string {
 		if strings.HasPrefix(info.Name(), ".") {
 			return nil
 		}
-		if parser.SourceTypeForPath(path) != "" {
-			results = append(results, path)
+		if parser.SourceTypeForPath(path) == "" {
+			return nil
 		}
+		if skipPlaceholders && isCloudPlaceholder(info) {
+			placeholders++
+			slog.Debug("skipping cloud-only file (not downloaded)", "path", path)
+			return nil
+		}
+		results = append(results, path)
 		return nil
 	})
+	if placeholders > 0 {
+		slog.Warn("skipped cloud-only files; download them locally to index them "+
+			"(Finder: Always Keep on This Device), or set skip_cloud_placeholders=false",
+			"count", placeholders, "vault", vaultPath)
+	}
 	return results
 }
 
