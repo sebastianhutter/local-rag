@@ -2,6 +2,7 @@ package parser
 
 import (
 	"database/sql"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"log/slog"
@@ -91,22 +92,39 @@ func ParseArticles(accountDir string, sinceTS float64) ([]*Article, error) {
 	defer conn.Close()
 
 	feedIDMap := loadFeedIDMap(accountDir)
-	authorsMap := loadRSSAuthors(conn)
+
+	// Newer NetNewsWire versions store authors as a JSON array directly on the
+	// articles row; older ones used separate authors/authorsLookup tables.
+	inlineAuthors := hasColumn(conn, "articles", "authors")
+	authorsMap := map[string][]string{}
+	if !inlineAuthors {
+		authorsMap = loadRSSAuthors(conn)
+	}
 
 	slog.Info("loaded RSS data",
 		"feeds", len(feedIDMap),
 		"authorSets", len(authorsMap),
+		"inlineAuthors", inlineAuthors,
 	)
 
-	query := "SELECT articleID, feedID, title, contentHTML, contentText, url, externalURL, summary, datePublished FROM articles"
+	authorsCol := "NULL"
+	if inlineAuthors {
+		authorsCol = "authors"
+	}
+	query := "SELECT articleID, feedID, title, contentHTML, contentText, url, externalURL, summary, datePublished, " + authorsCol + " FROM articles"
 	var args []any
 	if sinceTS > 0 {
-		// datePublished is a Unix timestamp (REAL). Compare numerically, exactly
-		// like the Python version did: WHERE datePublished > since_ts.
+		// datePublished is a Unix timestamp (REAL). Compare numerically.
 		// Using datetime() would interpret the large Unix value as a Julian Day
 		// Number (year ~4.7M AD), making every row pass the filter and silently
 		// dropping rows where datePublished IS NULL.
-		query += " WHERE datePublished > ?"
+		//
+		// The comparison is >= rather than >: feeds routinely publish several
+		// items sharing the exact same second, and a strict > would permanently
+		// drop siblings of the watermark article that only land in the
+		// NetNewsWire database after our run. Re-seen articles are cheap — the
+		// indexer skips ones it already has.
+		query += " WHERE datePublished >= ?"
 		args = append(args, sinceTS)
 	}
 	query += " ORDER BY datePublished ASC"
@@ -122,11 +140,11 @@ func ParseArticles(accountDir string, sinceTS float64) ([]*Article, error) {
 
 	for rows.Next() {
 		var articleID, feedID string
-		var title, contentHTML, contentText, articleURL, externalURL, summary sql.NullString
+		var title, contentHTML, contentText, articleURL, externalURL, summary, authorsJSON sql.NullString
 		var datePublishedRaw any
 
 		if err := rows.Scan(&articleID, &feedID, &title, &contentHTML, &contentText,
-			&articleURL, &externalURL, &summary, &datePublishedRaw); err != nil {
+			&articleURL, &externalURL, &summary, &datePublishedRaw, &authorsJSON); err != nil {
 			errorCount++
 			if errorCount <= 10 {
 				slog.Warn("error scanning article row", "err", err)
@@ -136,8 +154,13 @@ func ParseArticles(accountDir string, sinceTS float64) ([]*Article, error) {
 
 		datePublished := parseDatePublished(datePublishedRaw)
 
+		authors := authorsMap[articleID]
+		if authorsJSON.Valid {
+			authors = parseInlineAuthors(authorsJSON.String)
+		}
+
 		article := rssRowToArticle(articleID, feedID, title, contentHTML, contentText,
-			articleURL, externalURL, summary, datePublished, feedIDMap, authorsMap)
+			articleURL, externalURL, summary, datePublished, feedIDMap, authors)
 		if article != nil {
 			articles = append(articles, article)
 		}
@@ -296,6 +319,52 @@ func loadOPMLNames(accountDir string) map[string]string {
 	return names
 }
 
+// hasColumn reports whether a table has a column with the given name.
+func hasColumn(conn *sql.DB, table, column string) bool {
+	rows, err := conn.Query(fmt.Sprintf("PRAGMA table_info(%q)", table))
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return false
+		}
+		if strings.EqualFold(name, column) {
+			return true
+		}
+	}
+	return false
+}
+
+// parseInlineAuthors extracts author names from the JSON array stored in
+// articles.authors, e.g. [{"name":"Jane","authorID":"..."}].
+func parseInlineAuthors(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var entries []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		slog.Debug("cannot parse article authors JSON", "err", err)
+		return nil
+	}
+	var names []string
+	for _, e := range entries {
+		if n := strings.TrimSpace(e.Name); n != "" {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
+// loadRSSAuthors reads authors from the legacy authors/authorsLookup tables
+// used by older NetNewsWire versions.
 func loadRSSAuthors(conn *sql.DB) map[string][]string {
 	result := make(map[string][]string)
 	rows, err := conn.Query(
@@ -320,7 +389,7 @@ func rssRowToArticle(
 	title, contentHTML, contentText, articleURL, externalURL, summary sql.NullString,
 	datePublished float64,
 	feedIDMap map[string]feedInfo,
-	authorsMap map[string][]string,
+	authors []string,
 ) *Article {
 	titleStr := ""
 	if title.Valid {
@@ -369,7 +438,7 @@ func rssRowToArticle(
 		URL:             urlStr,
 		FeedName:        feedName,
 		FeedCategory:    fi.category,
-		Authors:         authorsMap[articleID],
+		Authors:         authors,
 		DatePublished:   tsToISO(ts),
 		DatePublishedTS: ts,
 	}
