@@ -2,7 +2,6 @@ package indexer
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,8 +11,6 @@ import (
 
 	"github.com/sebastianhutter/local-rag-go/internal/chunker"
 	"github.com/sebastianhutter/local-rag-go/internal/config"
-	"github.com/sebastianhutter/local-rag-go/internal/db"
-	"github.com/sebastianhutter/local-rag-go/internal/embeddings"
 	"github.com/sebastianhutter/local-rag-go/internal/parser"
 )
 
@@ -92,15 +89,10 @@ func indexEmailAccount(conn *sql.DB, cfg *config.Config, collectionID int64, acc
 	totalEmails := len(emails)
 	slog.Info("found emails to process", "count", totalEmails, "account", filepath.Base(accountDir))
 
+	// Pass 1 — decide what needs indexing. Cheap: no chunking, no network.
+	todo := make([]*parser.EmailMessage, 0, len(emails))
 	for _, email := range emails {
 		result.TotalFound++
-		if progress != nil {
-			subj := email.Subject
-			if subj == "" {
-				subj = "(no subject)"
-			}
-			progress(result.TotalFound, totalEmails, subj)
-		}
 
 		// Advance watermark for all emails we've seen, not just indexed ones.
 		if email.Date > latestDate {
@@ -111,23 +103,42 @@ func indexEmailAccount(conn *sql.DB, cfg *config.Config, collectionID int64, acc
 			result.Skipped++
 			continue
 		}
-
-		count, err := indexSingleEmail(conn, cfg, collectionID, email)
-		if err != nil {
-			result.Errors++
-			if result.Errors <= 10 {
-				msg := fmt.Sprintf("error indexing email %s: %v", email.MessageID, err)
-				slog.Warn(msg)
-				result.ErrorMessages = append(result.ErrorMessages, msg)
-			}
-			continue
-		}
-
-		result.Indexed++
-		slog.Info("indexed email", "subject", truncate(email.Subject, 60), "chunks", count)
+		todo = append(todo, email)
 	}
 
+	if len(todo) == 0 {
+		return result, latestDate
+	}
+	slog.Info("emails to index", "count", len(todo), "account", filepath.Base(accountDir))
+
+	// Pass 2 — chunk, embed in batches, write.
+	indexItemsBatched(conn, cfg, collectionID, "email", len(todo),
+		func(i int) *indexItem { return emailToItem(todo[i], cfg) },
+		result, progress)
+
 	return result, latestDate
+}
+
+// emailToItem chunks an email and collects the metadata stored with every one
+// of its chunks.
+func emailToItem(email *parser.EmailMessage, cfg *config.Config) *indexItem {
+	title := email.Subject
+	if title == "" {
+		title = "(no subject)"
+	}
+
+	return &indexItem{
+		SourcePath: email.MessageID,
+		Title:      title,
+		Chunks: chunker.ChunkEmail(email.Subject, email.BodyText,
+			cfg.ChunkSizeTokens, cfg.ChunkOverlapTokens),
+		Metadata: map[string]any{
+			"sender":     email.Sender,
+			"recipients": email.Recipients,
+			"date":       email.Date,
+			"folder":     email.Folder,
+		},
+	}
 }
 
 func parseEmailsWithRetry(accountDir, sinceDate string) ([]*parser.EmailMessage, error) {
@@ -148,65 +159,6 @@ func parseEmailsWithRetry(accountDir, sinceDate string) ([]*parser.EmailMessage,
 		return nil, err
 	}
 	return nil, fmt.Errorf("exhausted retries")
-}
-
-func indexSingleEmail(conn *sql.DB, cfg *config.Config, collectionID int64, email *parser.EmailMessage) (int, error) {
-	chunks := chunker.ChunkEmail(email.Subject, email.BodyText, cfg.ChunkSizeTokens, cfg.ChunkOverlapTokens)
-	if len(chunks) == 0 {
-		return 0, nil
-	}
-
-	texts := make([]string, len(chunks))
-	for i, c := range chunks {
-		texts[i] = c.Text
-	}
-
-	vecs, err := embed(texts, cfg)
-	if err != nil {
-		return 0, fmt.Errorf("embeddings: %w", err)
-	}
-
-	metadata := map[string]any{
-		"sender":     email.Sender,
-		"recipients": email.Recipients,
-		"date":       email.Date,
-		"folder":     email.Folder,
-	}
-	metaJSON, _ := json.Marshal(metadata)
-
-	now := time.Now().UTC().Format(time.RFC3339)
-
-	// Delete existing source if re-indexing
-	conn.Exec("DELETE FROM sources WHERE collection_id = ? AND source_path = ?",
-		collectionID, email.MessageID)
-
-	res, err := conn.Exec(
-		"INSERT INTO sources (collection_id, source_type, source_path, last_indexed_at) VALUES (?, 'email', ?, ?)",
-		collectionID, email.MessageID, now,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("insert source: %w", err)
-	}
-	sourceID, _ := res.LastInsertId()
-
-	for i, c := range chunks {
-		title := email.Subject
-		if title == "" {
-			title = "(no subject)"
-		}
-		docRes, err := conn.Exec(
-			"INSERT INTO documents (source_id, collection_id, chunk_index, title, content, metadata) VALUES (?, ?, ?, ?, ?, ?)",
-			sourceID, collectionID, c.ChunkIndex, title, c.Text, string(metaJSON),
-		)
-		if err != nil {
-			return 0, fmt.Errorf("insert document: %w", err)
-		}
-		docID, _ := docRes.LastInsertId()
-		vecBytes := embeddings.SerializeFloat32(vecs[i])
-		_ = db.InsertEmbedding(conn, docID, vecBytes)
-	}
-
-	return len(chunks), nil
 }
 
 func getEmailWatermark(conn *sql.DB, collectionID int64) string {
