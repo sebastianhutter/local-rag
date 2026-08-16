@@ -267,6 +267,10 @@ func writeItemBatch(conn *sql.DB, collectionID int64, b *itemBatch, result *Inde
 		return
 	}
 
+	// Clear out the previous version of everything in this batch in one pass,
+	// before storing any of it.
+	purgeSourceDocuments(conn, collectionID, b.items)
+
 	offset := 0
 	for _, item := range b.items {
 		vecs := b.vecs[offset : offset+len(item.Chunks)]
@@ -288,6 +292,77 @@ func writeItemBatch(conn *sql.DB, collectionID int64, b *itemBatch, result *Inde
 	}
 }
 
+// sqlParamLimit bounds how many bind parameters go into one statement. SQLite's
+// default ceiling is higher, but staying well under it keeps the generated SQL
+// small and predictable.
+const sqlParamLimit = 500
+
+// purgeSourceDocuments removes the existing documents and embeddings for every
+// item in a batch, in as few statements as possible.
+//
+// This has to be batched. vec_documents is a vec0 virtual table whose
+// document_id is not indexed, so every DELETE ... WHERE document_id IN (…)
+// scans the entire vector table. Doing that once per item made a force reindex
+// cost ~170ms per item against 100k vectors — over a second against the ~800k
+// here — which is hours of full scans for a corpus this size. Hoisting it to
+// once per batch cuts the number of scans by the batch size.
+func purgeSourceDocuments(conn *sql.DB, collectionID int64, items []*indexItem) {
+	if len(items) == 0 {
+		return
+	}
+
+	var docIDs []any
+	for start := 0; start < len(items); start += sqlParamLimit {
+		end := start + sqlParamLimit
+		if end > len(items) {
+			end = len(items)
+		}
+
+		args := make([]any, 0, len(items[start:end])+1)
+		args = append(args, collectionID)
+		for _, item := range items[start:end] {
+			args = append(args, item.SourcePath)
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", end-start), ",")
+
+		rows, err := conn.Query(`
+			SELECT d.id FROM documents d
+			JOIN sources s ON d.source_id = s.id
+			WHERE s.collection_id = ? AND s.source_path IN (`+placeholders+`)`, args...)
+		if err != nil {
+			slog.Warn("cannot list documents to purge", "err", err)
+			return
+		}
+		for rows.Next() {
+			var id int64
+			if rows.Scan(&id) == nil {
+				docIDs = append(docIDs, id)
+			}
+		}
+		rows.Close()
+	}
+
+	if len(docIDs) == 0 {
+		return
+	}
+
+	for start := 0; start < len(docIDs); start += sqlParamLimit {
+		end := start + sqlParamLimit
+		if end > len(docIDs) {
+			end = len(docIDs)
+		}
+		chunk := docIDs[start:end]
+
+		if err := db.DeleteEmbeddings(conn, chunk); err != nil {
+			slog.Warn("cannot delete embeddings", "err", err)
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+		if _, err := conn.Exec("DELETE FROM documents WHERE id IN ("+placeholders+")", chunk...); err != nil {
+			slog.Warn("cannot delete documents", "err", err)
+		}
+	}
+}
+
 // storeItem writes one item's chunks and their embeddings. Embedding has
 // already happened in batch, so vecs is parallel to item.Chunks.
 //
@@ -296,8 +371,10 @@ func writeItemBatch(conn *sql.DB, collectionID int64, b *itemBatch, result *Inde
 // documents, but the vector tables are vec0 virtual tables with no foreign
 // keys, so a cascade alone would strand their embeddings.
 func storeItem(conn *sql.DB, collectionID int64, item *indexItem, vecs [][]float32) error {
-	sourceID, err := upsertSource(conn, collectionID, item.SourcePath, item.SourceType,
-		item.FileHash, item.Mtime)
+	// purged=true: writeItemBatch already removed the old documents and vectors
+	// for the whole batch.
+	sourceID, err := upsertSourceRow(conn, collectionID, item.SourcePath, item.SourceType,
+		item.FileHash, item.Mtime, true)
 	if err != nil {
 		return err
 	}

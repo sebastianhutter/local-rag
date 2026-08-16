@@ -332,27 +332,71 @@ func TestChunkMetadataEmpty(t *testing.T) {
 	}
 }
 
-// Re-indexing an item replaces it rather than accumulating duplicates.
-func TestStoreItemReplacesExisting(t *testing.T) {
+// Re-indexing replaces the previous version rather than accumulating
+// duplicates, and leaves no stranded vectors behind. Purging is the batch's
+// job — storeItem alone deliberately does not clear the old rows, because the
+// per-source vector delete scans the whole vec0 table.
+func TestWriteItemBatchReplacesExisting(t *testing.T) {
 	conn := setupTestDB(t)
 	collID := mustGetOrCreate(t, conn, "rss", "system")
 
-	item := makeItems(1, 2)[0]
-	vecs := [][]float32{make([]float32, 1024), make([]float32, 1024)}
+	newBatch := func() *itemBatch {
+		b := collectBatches(makeItems(2, 2), testBatchConfig(32))[0]
+		b.vecs = make([][]float32, len(b.texts))
+		for i := range b.vecs {
+			b.vecs[i] = make([]float32, 1024)
+		}
+		return b
+	}
 
-	for i := 0; i < 2; i++ {
-		if err := storeItem(conn, collID, item, vecs); err != nil {
-			t.Fatalf("pass %d: %v", i, err)
+	for pass := 1; pass <= 2; pass++ {
+		result := &IndexResult{}
+		writeItemBatch(conn, collID, newBatch(), result)
+		if result.Errors != 0 {
+			t.Fatalf("pass %d: %d errors: %v", pass, result.Errors, result.ErrorMessages)
+		}
+
+		var sources, docs, vecs int
+		conn.QueryRow("SELECT COUNT(*) FROM sources WHERE collection_id = ?", collID).Scan(&sources)
+		conn.QueryRow("SELECT COUNT(*) FROM documents WHERE collection_id = ?", collID).Scan(&docs)
+		conn.QueryRow("SELECT COUNT(*) FROM vec_documents").Scan(&vecs)
+
+		if sources != 2 {
+			t.Errorf("pass %d: got %d sources, want 2", pass, sources)
+		}
+		if docs != 4 {
+			t.Errorf("pass %d: got %d documents, want 4", pass, docs)
+		}
+		if vecs != docs {
+			t.Errorf("pass %d: %d vectors for %d documents — stranded embeddings", pass, vecs, docs)
 		}
 	}
+}
 
-	var sources, docs int
-	conn.QueryRow("SELECT COUNT(*) FROM sources WHERE collection_id = ?", collID).Scan(&sources)
-	conn.QueryRow("SELECT COUNT(*) FROM documents WHERE collection_id = ?", collID).Scan(&docs)
-	if sources != 1 {
-		t.Errorf("got %d sources after re-indexing, want 1", sources)
+// The purge must only touch the items in the batch, not the rest of the
+// collection.
+func TestPurgeSourceDocumentsLeavesOthersAlone(t *testing.T) {
+	conn := setupTestDB(t)
+	collID := mustGetOrCreate(t, conn, "rss", "system")
+
+	all := makeItems(4, 1)
+	b := collectBatches(all, testBatchConfig(32))[0]
+	b.vecs = make([][]float32, len(b.texts))
+	for i := range b.vecs {
+		b.vecs[i] = make([]float32, 1024)
 	}
+	writeItemBatch(conn, collID, b, &IndexResult{})
+
+	// Purge only two of the four.
+	purgeSourceDocuments(conn, collID, all[:2])
+
+	var docs, vecs int
+	conn.QueryRow("SELECT COUNT(*) FROM documents WHERE collection_id = ?", collID).Scan(&docs)
+	conn.QueryRow("SELECT COUNT(*) FROM vec_documents").Scan(&vecs)
 	if docs != 2 {
-		t.Errorf("got %d documents after re-indexing, want 2", docs)
+		t.Errorf("got %d documents, want the 2 untouched ones", docs)
+	}
+	if vecs != 2 {
+		t.Errorf("got %d vectors, want 2 — purge must remove exactly the batch's embeddings", vecs)
 	}
 }

@@ -259,7 +259,15 @@ func parseAndChunk(path, sourceType string, cfg *config.Config) []chunker.Chunk 
 
 // upsertSource inserts or updates a source row and deletes old documents/vectors.
 // Returns the source ID.
+//
+// Callers replacing many sources at once should purge first with
+// purgeSourceDocuments and then pass purged=true: the per-source vector delete
+// below scans the whole vec0 table, which is ruinous in a loop.
 func upsertSource(conn *sql.DB, collectionID int64, sourcePath, sourceType, fileH, mtime string) (int64, error) {
+	return upsertSourceRow(conn, collectionID, sourcePath, sourceType, fileH, mtime, false)
+}
+
+func upsertSourceRow(conn *sql.DB, collectionID int64, sourcePath, sourceType, fileH, mtime string, purged bool) (int64, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	var existingID sql.NullInt64
@@ -270,8 +278,10 @@ func upsertSource(conn *sql.DB, collectionID int64, sourcePath, sourceType, file
 
 	if err == nil && existingID.Valid {
 		sourceID := existingID.Int64
-		// Delete old documents and vectors
-		deleteOldDocs(conn, sourceID)
+		if !purged {
+			// Delete old documents and vectors
+			deleteOldDocs(conn, sourceID)
+		}
 		conn.Exec(
 			"UPDATE sources SET file_hash = ?, file_modified_at = ?, last_indexed_at = ?, source_type = ? WHERE id = ?",
 			fileH, mtime, now, sourceType, sourceID,
