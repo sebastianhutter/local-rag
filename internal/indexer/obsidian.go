@@ -46,22 +46,9 @@ func IndexObsidian(conn *sql.DB, cfg *config.Config, force bool, progress Progre
 
 	result := &IndexResult{TotalFound: len(allFiles)}
 
-	for i, filePath := range allFiles {
-		if progress != nil {
-			progress(i+1, len(allFiles), filepath.Base(filePath))
-		}
-		indexed, err := indexSingleFile(conn, cfg, filePath, collectionID, force)
-		if err != nil {
-			slog.Error("error indexing", "path", filePath, "err", err)
-			result.Errors++
-			continue
-		}
-		if indexed {
-			result.Indexed++
-		} else {
-			result.Skipped++
-		}
-	}
+	indexItemsBatched(conn, cfg, collectionID, "obsidian", len(allFiles),
+		func(i int) *indexItem { return fileToItem(conn, cfg, allFiles[i], collectionID, force) },
+		result, progress)
 
 	slog.Info("obsidian indexing complete", "result", result.String())
 	return result

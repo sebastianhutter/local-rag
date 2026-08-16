@@ -258,12 +258,8 @@ func TestIndexSingleFileSkipsUnchangedWithoutReading(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(path, 0o644) })
 
-	indexed, err := indexSingleFile(conn, &config.Config{}, path, collID, false)
-	if err != nil {
-		t.Fatalf("unchanged file should be skipped without reading it, got error: %v", err)
-	}
-	if indexed {
-		t.Error("unchanged file should not be re-indexed")
+	if item := fileToItem(conn, &config.Config{}, path, collID, false); item != nil {
+		t.Error("unchanged file should be skipped without being opened")
 	}
 }
 

@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -32,6 +33,7 @@ func makeItems(n, chunksPer int) []*indexItem {
 		}
 		items[i] = &indexItem{
 			SourcePath: fmt.Sprintf("id-%d", i),
+			SourceType: "rss",
 			Title:      fmt.Sprintf("Item %d", i),
 			Chunks:     chunks,
 			Metadata:   map[string]any{"date": "2026-01-01T00:00:00Z"},
@@ -162,7 +164,7 @@ func TestWriteItemBatchEmbedError(t *testing.T) {
 		err:   fmt.Errorf("ollama unreachable"),
 	}
 	result := &IndexResult{}
-	writeItemBatch(conn, collID, "rss", b, result)
+	writeItemBatch(conn, collID, b, result)
 
 	if result.Errors != 3 {
 		t.Errorf("got %d errors, want 3 (one per item)", result.Errors)
@@ -183,7 +185,7 @@ func TestWriteItemBatchVectorCountMismatch(t *testing.T) {
 	b.vecs = [][]float32{make([]float32, 1024)} // one vector, two texts
 
 	result := &IndexResult{}
-	writeItemBatch(conn, collID, "rss", b, result)
+	writeItemBatch(conn, collID, b, result)
 
 	if result.Indexed != 0 {
 		t.Errorf("got %d indexed, want 0 on a count mismatch", result.Indexed)
@@ -206,6 +208,9 @@ func TestWriteItemBatchStoresPerItemRows(t *testing.T) {
 	collID := mustGetOrCreate(t, conn, "email", "system")
 
 	items := makeItems(3, 2)
+	for _, item := range items {
+		item.SourceType = "email"
+	}
 	items[1].Metadata = map[string]any{"sender": "someone@example.com"}
 
 	b := collectBatches(items, testBatchConfig(32))[0]
@@ -215,7 +220,7 @@ func TestWriteItemBatchStoresPerItemRows(t *testing.T) {
 	}
 
 	result := &IndexResult{}
-	writeItemBatch(conn, collID, "email", b, result)
+	writeItemBatch(conn, collID, b, result)
 
 	if result.Indexed != 3 {
 		t.Fatalf("got %d indexed, want 3", result.Indexed)
@@ -244,6 +249,45 @@ func TestWriteItemBatchStoresPerItemRows(t *testing.T) {
 	}
 }
 
+// Item metadata describes the whole source (sender, feed, book author); chunk
+// metadata describes one chunk (page number, symbol path). Both must survive,
+// and the chunk's own keys must win.
+func TestChunkMetadataMerge(t *testing.T) {
+	item := &indexItem{Metadata: map[string]any{"feed_name": "Example", "date": "2026-01-01"}}
+	chunk := chunker.Chunk{Metadata: map[string]any{"page_number": 7, "date": "chunk-wins"}}
+
+	got, err := chunkMetadata(item, chunk)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var merged map[string]any
+	if err := json.Unmarshal([]byte(got), &merged); err != nil {
+		t.Fatalf("not valid JSON: %v (%s)", err, got)
+	}
+	if merged["feed_name"] != "Example" {
+		t.Errorf("item metadata lost: %v", merged)
+	}
+	if merged["page_number"] != float64(7) {
+		t.Errorf("chunk metadata lost: %v", merged)
+	}
+	if merged["date"] != "chunk-wins" {
+		t.Errorf("chunk metadata should win on conflict, got %v", merged["date"])
+	}
+}
+
+// Nothing to record must stay NULL rather than becoming the string "{}", which
+// would make json_extract filters see an empty object instead of no metadata.
+func TestChunkMetadataEmpty(t *testing.T) {
+	got, err := chunkMetadata(&indexItem{}, chunker.Chunk{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
 // Re-indexing an item replaces it rather than accumulating duplicates.
 func TestStoreItemReplacesExisting(t *testing.T) {
 	conn := setupTestDB(t)
@@ -253,7 +297,7 @@ func TestStoreItemReplacesExisting(t *testing.T) {
 	vecs := [][]float32{make([]float32, 1024), make([]float32, 1024)}
 
 	for i := 0; i < 2; i++ {
-		if err := storeItem(conn, collID, "rss", item, vecs); err != nil {
+		if err := storeItem(conn, collID, item, vecs); err != nil {
 			t.Fatalf("pass %d: %v", i, err)
 		}
 	}

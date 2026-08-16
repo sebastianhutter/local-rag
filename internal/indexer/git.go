@@ -14,8 +14,6 @@ import (
 
 	"github.com/sebastianhutter/local-rag-go/internal/chunker"
 	"github.com/sebastianhutter/local-rag-go/internal/config"
-	"github.com/sebastianhutter/local-rag-go/internal/db"
-	"github.com/sebastianhutter/local-rag-go/internal/embeddings"
 	"github.com/sebastianhutter/local-rag-go/internal/parser"
 )
 
@@ -158,22 +156,9 @@ func IndexGitRepo(conn *sql.DB, cfg *config.Config, repoPath, collectionName str
 	result := &IndexResult{TotalFound: len(indexable)}
 	slog.Info("indexing code files", "count", len(indexable), "collection", collectionName)
 
-	for i, relPath := range indexable {
-		if progress != nil {
-			progress(i+1, len(indexable), relPath)
-		}
-		indexed, err := indexCodeFile(conn, cfg, repoPath, relPath, collectionID, force)
-		if err != nil {
-			slog.Error("error indexing", "path", relPath, "err", err)
-			result.Errors++
-			continue
-		}
-		if indexed {
-			result.Indexed++
-		} else {
-			result.Skipped++
-		}
-	}
+	indexItemsBatched(conn, cfg, collectionID, collectionName, len(indexable),
+		func(i int) *indexItem { return codeFileToItem(conn, cfg, repoPath, indexable[i], collectionID, force) },
+		result, progress)
 
 	// Update watermark
 	watermarks[repoKey] = headSHA
@@ -190,44 +175,40 @@ func IndexGitRepo(conn *sql.DB, cfg *config.Config, repoPath, collectionName str
 	return result
 }
 
-func indexCodeFile(conn *sql.DB, cfg *config.Config, repoPath, relPath string, collectionID int64, force bool) (bool, error) {
+// codeFileToItem prepares one tracked file for indexing, or returns nil if it
+// should be skipped — unchanged, unsupported language, or nothing parseable.
+// Tree-sitter parsing only runs for files that will actually be re-embedded.
+func codeFileToItem(conn *sql.DB, cfg *config.Config, repoPath, relPath string, collectionID int64, force bool) *indexItem {
 	absPath := filepath.Join(repoPath, relPath)
 	if !fileExists(absPath) {
-		return false, nil
+		return nil
 	}
 
+	// Unlike ordinary files there is no mtime pre-check here: git already told
+	// us which files changed, so the survivors are worth hashing.
 	fh, err := fileHash(absPath)
 	if err != nil {
-		return false, err
+		slog.Warn("cannot hash file, skipping", "path", relPath, "err", err)
+		return nil
 	}
 
 	if !force && isSourceUnchanged(conn, collectionID, absPath, fh) {
-		return false, nil
+		return nil
 	}
 
 	language := parser.GetCodeLanguage(relPath)
 	if language == "" {
-		return false, nil
+		return nil
 	}
 
 	doc := parser.ParseCodeFile(absPath, language, relPath, cfg.ChunkSizeTokens, cfg.ChunkOverlapTokens)
 	if doc == nil || len(doc.Blocks) == 0 {
-		return false, nil
+		return nil
 	}
 
 	chunks := codeBlocksToChunks(doc, relPath, cfg)
 	if len(chunks) == 0 {
-		return false, nil
-	}
-
-	texts := make([]string, len(chunks))
-	for i, c := range chunks {
-		texts[i] = c.Text
-	}
-
-	vecs, err := embed(texts, cfg)
-	if err != nil {
-		return false, fmt.Errorf("embeddings: %w", err)
+		return nil
 	}
 
 	info, _ := os.Stat(absPath)
@@ -236,27 +217,51 @@ func indexCodeFile(conn *sql.DB, cfg *config.Config, repoPath, relPath string, c
 		mtime = info.ModTime().UTC().Format(time.RFC3339)
 	}
 
-	sourceID, err := upsertSource(conn, collectionID, absPath, "code", fh, mtime)
-	if err != nil {
-		return false, err
+	return &indexItem{
+		SourcePath: absPath,
+		SourceType: "code",
+		Chunks:     chunks,
+		FileHash:   fh,
+		Mtime:      mtime,
+	}
+}
+
+// commitToItem prepares one commit for indexing, or returns nil if it should be
+// skipped — already indexed, or an empty/unparseable diff. Reading the diff is
+// a git subprocess per commit, so it only runs for commits we intend to store.
+func commitToItem(
+	conn *sql.DB,
+	cfg *config.Config,
+	repoPath, repoKey string,
+	collectionID int64,
+	commit CommitInfo,
+	force bool,
+) *indexItem {
+	sourcePath := fmt.Sprintf("git://%s#%s", repoKey, commit.SHA)
+
+	if !force && isSourceExists(conn, collectionID, sourcePath) {
+		return nil
 	}
 
-	for i, c := range chunks {
-		metaJSON, _ := json.Marshal(c.Metadata)
-		res, err := conn.Exec(
-			"INSERT INTO documents (source_id, collection_id, chunk_index, title, content, metadata) VALUES (?, ?, ?, ?, ?, ?)",
-			sourceID, collectionID, c.ChunkIndex, c.Title, c.Text, string(metaJSON),
-		)
-		if err != nil {
-			return false, fmt.Errorf("insert document: %w", err)
-		}
-		docID, _ := res.LastInsertId()
-		vecBytes := embeddings.SerializeFloat32(vecs[i])
-		_ = db.InsertEmbedding(conn, docID, vecBytes)
+	fileChanges := getCommitFileChanges(repoPath, commit.SHA)
+	if len(fileChanges) == 0 {
+		return nil
 	}
 
-	slog.Info("indexed code file", "path", relPath, "chunks", len(chunks))
-	return true, nil
+	chunks := commitToChunks(commit, fileChanges, repoPath, cfg)
+	if len(chunks) == 0 {
+		return nil
+	}
+
+	return &indexItem{
+		SourcePath: sourcePath,
+		SourceType: "commit",
+		Chunks:     chunks,
+		// The SHA stands in for a content hash and the author date for an
+		// mtime, matching what the previous per-commit insert recorded.
+		FileHash: commit.SHA,
+		Mtime:    commit.AuthorDate,
+	}
 }
 
 func codeBlocksToChunks(doc *parser.CodeDocument, relPath string, cfg *config.Config) []chunker.Chunk {
@@ -349,72 +354,11 @@ func indexGitHistory(conn *sql.DB, cfg *config.Config, repoPath string, collecti
 	result := &IndexResult{TotalFound: len(commits)}
 	newestSHA := commits[len(commits)-1].SHA
 
-	for i, commit := range commits {
-		sourcePath := fmt.Sprintf("git://%s#%s", repoKey, commit.SHA)
-
-		if !force && isSourceExists(conn, collectionID, sourcePath) {
-			result.Skipped++
-			continue
-		}
-
-		fileChanges := getCommitFileChanges(repoPath, commit.SHA)
-		if len(fileChanges) == 0 {
-			result.Skipped++
-			continue
-		}
-
-		chunks := commitToChunks(commit, fileChanges, repoPath, cfg)
-		if len(chunks) == 0 {
-			result.Skipped++
-			continue
-		}
-
-		texts := make([]string, len(chunks))
-		for j, c := range chunks {
-			texts[j] = c.Text
-		}
-
-		vecs, err := embed(texts, cfg)
-		if err != nil {
-			slog.Error("error embedding commit", "sha", commit.SHA[:12], "err", err)
-			result.Errors++
-			continue
-		}
-
-		now := time.Now().UTC().Format(time.RFC3339)
-		res, err := conn.Exec(
-			"INSERT INTO sources (collection_id, source_type, source_path, file_hash, file_modified_at, last_indexed_at) VALUES (?, ?, ?, ?, ?, ?)",
-			collectionID, "commit", sourcePath, commit.SHA, commit.AuthorDate, now,
-		)
-		if err != nil {
-			slog.Error("error inserting commit source", "sha", commit.SHA[:12], "err", err)
-			result.Errors++
-			continue
-		}
-		sourceID, _ := res.LastInsertId()
-
-		for j, c := range chunks {
-			metaJSON, _ := json.Marshal(c.Metadata)
-			docRes, err := conn.Exec(
-				"INSERT INTO documents (source_id, collection_id, chunk_index, title, content, metadata) VALUES (?, ?, ?, ?, ?, ?)",
-				sourceID, collectionID, c.ChunkIndex, c.Title, c.Text, string(metaJSON),
-			)
-			if err != nil {
-				continue
-			}
-			docID, _ := docRes.LastInsertId()
-			vecBytes := embeddings.SerializeFloat32(vecs[j])
-			_ = db.InsertEmbedding(conn, docID, vecBytes)
-		}
-
-		result.Indexed++
-		slog.Info("indexed commit",
-			"num", fmt.Sprintf("%d/%d", i+1, len(commits)),
-			"sha", commit.SHA[:7],
-			"subject", truncate(commit.Subject, 60),
-			"chunks", len(chunks),
-		)
-	}
+	indexItemsBatched(conn, cfg, collectionID, "commits", len(commits),
+		func(i int) *indexItem {
+			return commitToItem(conn, cfg, repoPath, repoKey, collectionID, commits[i], force)
+		},
+		result, nil)
 
 	// Update history watermark
 	watermarks[historyKey] = newestSHA

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/sebastianhutter/local-rag-go/internal/chunker"
 	"github.com/sebastianhutter/local-rag-go/internal/config"
@@ -15,14 +14,23 @@ import (
 	"github.com/sebastianhutter/local-rag-go/internal/embeddings"
 )
 
-// indexItem is one message-like thing to index: an RSS article, an email — any
-// source whose unit of indexing is identified by a single path/ID and carries
-// the same metadata across all of its chunks.
+// indexItem is one thing to index — a file, an RSS article, an email, a commit
+// — reduced to what storage needs: an identity, its chunks, and the metadata to
+// record alongside them.
 type indexItem struct {
-	SourcePath string // article ID, message ID, …
+	SourcePath string // absolute file path, article ID, message ID, git://…
+	SourceType string // markdown, pdf, code, rss, email, commit, …
 	Title      string
 	Chunks     []chunker.Chunk
-	Metadata   map[string]any
+
+	// Metadata is shared by every chunk of this item. Chunks may also carry
+	// their own (page number, symbol path, …), which takes precedence.
+	Metadata map[string]any
+
+	// FileHash and Mtime drive incremental indexing for file-backed sources;
+	// both are empty for sources identified by ID rather than content.
+	FileHash string
+	Mtime    string
 }
 
 // itemBatch is a group of items whose chunks are embedded in one request.
@@ -39,8 +47,11 @@ type itemBatch struct {
 	err   error
 }
 
-// itemFunc returns the item at index i, or nil to skip it. Items are built
-// lazily so only the batches currently in flight hold chunked text.
+// itemFunc returns the item at index i, or nil to skip it — unchanged since the
+// last run, or nothing extractable. Items are built lazily so only the batches
+// currently in flight hold chunked text, and so expensive work (PDF text
+// extraction, OCR, tree-sitter parsing) is never done for an item that will be
+// skipped anyway.
 type itemFunc func(i int) *indexItem
 
 // indexItemsBatched chunks, embeds and stores a run of items.
@@ -52,7 +63,7 @@ func indexItemsBatched(
 	conn *sql.DB,
 	cfg *config.Config,
 	collectionID int64,
-	sourceType string,
+	label string,
 	total int,
 	itemAt itemFunc,
 	result *IndexResult,
@@ -66,10 +77,11 @@ func indexItemsBatched(
 	if workers < 1 {
 		workers = 1
 	}
-	slog.Info("embedding items", "type", sourceType, "count", total,
+	slog.Info("embedding items", "source", label, "count", total,
 		"workers", workers, "batch_size", cfg.EmbeddingBatchSize)
 
 	b := &itemBatcher{cfg: cfg, total: total, itemAt: itemAt}
+	defer func() { result.Skipped += b.skipped }()
 	done := 0
 
 	for {
@@ -98,7 +110,7 @@ func indexItemsBatched(
 		wg.Wait()
 
 		for _, batch := range wave {
-			writeItemBatch(conn, collectionID, sourceType, batch, result)
+			writeItemBatch(conn, collectionID, batch, result)
 
 			done += len(batch.items)
 			if progress != nil {
@@ -113,10 +125,11 @@ func indexItemsBatched(
 // so a batch may slightly exceed the target — writeItemBatch relies on each
 // item's vectors being contiguous.
 type itemBatcher struct {
-	cfg    *config.Config
-	total  int
-	next   int
-	itemAt itemFunc
+	cfg     *config.Config
+	total   int
+	next    int
+	itemAt  itemFunc
+	skipped int // items the itemFunc declined, or that had no usable text
 }
 
 // nextBatch returns the next batch, or nil once the items are exhausted.
@@ -131,9 +144,12 @@ func (b *itemBatcher) nextBatch() *itemBatch {
 		item := b.itemAt(b.next)
 		b.next++
 
-		// An item with neither title nor body chunks to a single empty string;
-		// embedding that wastes a slot and stores a blank document.
+		// Either the itemFunc declined it (unchanged, unreadable), or it chunked
+		// to nothing but blank text — an item with neither title nor body
+		// produces a single empty string, and embedding that would waste a slot
+		// and store a blank document.
 		if item == nil || !hasContent(item.Chunks) {
+			b.skipped++
 			continue
 		}
 
@@ -165,11 +181,11 @@ func hasContent(chunks []chunker.Chunk) bool {
 
 // writeItemBatch stores an embedded batch, attributing failures per item so one
 // bad item does not sink the rest.
-func writeItemBatch(conn *sql.DB, collectionID int64, sourceType string, b *itemBatch, result *IndexResult) {
+func writeItemBatch(conn *sql.DB, collectionID int64, b *itemBatch, result *IndexResult) {
 	if b.err != nil {
 		result.Errors += len(b.items)
 		if result.Errors <= 10 {
-			msg := fmt.Sprintf("error embedding batch of %d %s items: %v", len(b.items), sourceType, b.err)
+			msg := fmt.Sprintf("error embedding batch of %d items: %v", len(b.items), b.err)
 			slog.Warn(msg)
 			result.ErrorMessages = append(result.ErrorMessages, msg)
 		}
@@ -191,10 +207,10 @@ func writeItemBatch(conn *sql.DB, collectionID int64, sourceType string, b *item
 		vecs := b.vecs[offset : offset+len(item.Chunks)]
 		offset += len(item.Chunks)
 
-		if err := storeItem(conn, collectionID, sourceType, item, vecs); err != nil {
+		if err := storeItem(conn, collectionID, item, vecs); err != nil {
 			result.Errors++
 			if result.Errors <= 10 {
-				msg := fmt.Sprintf("error indexing %s %s: %v", sourceType, item.SourcePath, err)
+				msg := fmt.Sprintf("error indexing %s %s: %v", item.SourceType, item.SourcePath, err)
 				slog.Warn(msg)
 				result.ErrorMessages = append(result.ErrorMessages, msg)
 			}
@@ -202,34 +218,39 @@ func writeItemBatch(conn *sql.DB, collectionID int64, sourceType string, b *item
 		}
 
 		result.Indexed++
-		slog.Debug("indexed item", "type", sourceType,
+		slog.Debug("indexed item", "type", item.SourceType,
 			"title", truncate(item.Title, 60), "chunks", len(item.Chunks))
 	}
 }
 
 // storeItem writes one item's chunks and their embeddings. Embedding has
 // already happened in batch, so vecs is parallel to item.Chunks.
-func storeItem(conn *sql.DB, collectionID int64, sourceType string, item *indexItem, vecs [][]float32) error {
-	metaJSON, _ := json.Marshal(item.Metadata)
-	now := time.Now().UTC().Format(time.RFC3339)
-
-	// Replace any previous version of this item.
-	conn.Exec("DELETE FROM sources WHERE collection_id = ? AND source_path = ?",
-		collectionID, item.SourcePath)
-
-	res, err := conn.Exec(
-		"INSERT INTO sources (collection_id, source_type, source_path, last_indexed_at) VALUES (?, ?, ?, ?)",
-		collectionID, sourceType, item.SourcePath, now,
-	)
+//
+// upsertSource is used rather than a plain DELETE + INSERT because it also
+// clears the old rows out of vec_documents. Deleting a source cascades to its
+// documents, but the vector tables are vec0 virtual tables with no foreign
+// keys, so a cascade alone would strand their embeddings.
+func storeItem(conn *sql.DB, collectionID int64, item *indexItem, vecs [][]float32) error {
+	sourceID, err := upsertSource(conn, collectionID, item.SourcePath, item.SourceType,
+		item.FileHash, item.Mtime)
 	if err != nil {
-		return fmt.Errorf("insert source: %w", err)
+		return err
 	}
-	sourceID, _ := res.LastInsertId()
 
 	for i, c := range item.Chunks {
+		metaJSON, err := chunkMetadata(item, c)
+		if err != nil {
+			return err
+		}
+
+		title := c.Title
+		if item.Title != "" {
+			title = item.Title
+		}
+
 		docRes, err := conn.Exec(
 			"INSERT INTO documents (source_id, collection_id, chunk_index, title, content, metadata) VALUES (?, ?, ?, ?, ?, ?)",
-			sourceID, collectionID, c.ChunkIndex, item.Title, c.Text, string(metaJSON),
+			sourceID, collectionID, c.ChunkIndex, title, c.Text, metaJSON,
 		)
 		if err != nil {
 			return fmt.Errorf("insert document: %w", err)
@@ -241,4 +262,27 @@ func storeItem(conn *sql.DB, collectionID int64, sourceType string, item *indexI
 	}
 
 	return nil
+}
+
+// chunkMetadata merges the item-wide metadata with the chunk's own. Chunk keys
+// win: a page number or symbol path describes that chunk specifically, while
+// the item's metadata (sender, feed, book author) describes the whole source.
+func chunkMetadata(item *indexItem, c chunker.Chunk) (string, error) {
+	if len(item.Metadata) == 0 && len(c.Metadata) == 0 {
+		return "", nil
+	}
+
+	merged := make(map[string]any, len(item.Metadata)+len(c.Metadata))
+	for k, v := range item.Metadata {
+		merged[k] = v
+	}
+	for k, v := range c.Metadata {
+		merged[k] = v
+	}
+
+	b, err := json.Marshal(merged)
+	if err != nil {
+		return "", fmt.Errorf("marshal metadata: %w", err)
+	}
+	return string(b), nil
 }

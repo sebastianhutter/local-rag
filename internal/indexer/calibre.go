@@ -3,16 +3,12 @@ package indexer
 import (
 	"crypto/sha256"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
-	"time"
 
 	"github.com/sebastianhutter/local-rag-go/internal/chunker"
 	"github.com/sebastianhutter/local-rag-go/internal/config"
-	"github.com/sebastianhutter/local-rag-go/internal/db"
-	"github.com/sebastianhutter/local-rag-go/internal/embeddings"
 	"github.com/sebastianhutter/local-rag-go/internal/parser"
 )
 
@@ -52,22 +48,11 @@ func IndexCalibre(conn *sql.DB, cfg *config.Config, force bool, progress Progres
 
 	result := &IndexResult{TotalFound: len(allBooks)}
 
-	for i, entry := range allBooks {
-		if progress != nil {
-			progress(i+1, len(allBooks), entry.book.Title)
-		}
-		status, err := indexBook(conn, cfg, collectionID, entry.libraryPath, entry.book, force)
-		if err != nil {
-			slog.Error("error indexing book", "title", entry.book.Title, "err", err)
-			result.Errors++
-			continue
-		}
-		if status == "indexed" {
-			result.Indexed++
-		} else {
-			result.Skipped++
-		}
-	}
+	indexItemsBatched(conn, cfg, collectionID, "calibre", len(allBooks),
+		func(i int) *indexItem {
+			return bookToItem(conn, cfg, collectionID, allBooks[i].libraryPath, allBooks[i].book, force)
+		},
+		result, progress)
 
 	slog.Info("calibre indexing complete", "result", result.String())
 	return result
@@ -110,7 +95,10 @@ func buildBookMetadata(book *parser.CalibreBook, libraryPath, format string) map
 	return meta
 }
 
-func indexBook(conn *sql.DB, cfg *config.Config, collectionID int64, libraryPath string, book *parser.CalibreBook, force bool) (string, error) {
+// bookToItem prepares one book for indexing, or returns nil if it should be
+// skipped — unchanged, or no extractable content. EPUB/PDF extraction only runs
+// for books that will actually be re-embedded.
+func bookToItem(conn *sql.DB, cfg *config.Config, collectionID int64, libraryPath string, book *parser.CalibreBook, force bool) *indexItem {
 	filePath, format := parser.GetBookFilePath(libraryPath, book, preferredFormats)
 
 	var sourcePath, contentHash, sourceType string
@@ -118,14 +106,15 @@ func indexBook(conn *sql.DB, cfg *config.Config, collectionID int64, libraryPath
 		sourcePath = filePath
 		h, err := fileHash(filePath)
 		if err != nil {
-			return "", fmt.Errorf("hash %s: %w", filePath, err)
+			slog.Warn("cannot hash book file, skipping", "title", book.Title, "err", err)
+			return nil
 		}
 		contentHash = h
 		sourceType = format
 	} else {
 		if book.Description == "" {
 			slog.Warn("book has no EPUB/PDF and no description, skipping", "title", book.Title)
-			return "skipped", nil
+			return nil
 		}
 		sourcePath = fmt.Sprintf("calibre://%s/%s", libraryPath, book.RelativePath)
 		h := sha256.Sum256([]byte(book.Description))
@@ -135,49 +124,24 @@ func indexBook(conn *sql.DB, cfg *config.Config, collectionID int64, libraryPath
 	}
 
 	if !force && isSourceUnchanged(conn, collectionID, sourcePath, contentHash) {
-		return "skipped", nil
+		return nil
 	}
 
 	bookMeta := buildBookMetadata(book, libraryPath, format)
 	chunks := extractAndChunkBook(book, filePath, format, cfg, bookMeta)
 	if len(chunks) == 0 {
 		slog.Warn("no content extracted from book, skipping", "title", book.Title)
-		return "skipped", nil
+		return nil
 	}
 
-	texts := make([]string, len(chunks))
-	for i, c := range chunks {
-		texts[i] = c.Text
+	return &indexItem{
+		SourcePath: sourcePath,
+		SourceType: sourceType,
+		Title:      book.Title,
+		Chunks:     chunks,
+		FileHash:   contentHash,
+		Mtime:      book.LastModified,
 	}
-
-	vecs, err := embed(texts, cfg)
-	if err != nil {
-		return "", fmt.Errorf("embeddings: %w", err)
-	}
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	sourceID, err := upsertSource(conn, collectionID, sourcePath, sourceType, contentHash, book.LastModified)
-	if err != nil {
-		return "", err
-	}
-
-	for i, c := range chunks {
-		metaJSON, _ := json.Marshal(c.Metadata)
-		res, err := conn.Exec(
-			"INSERT INTO documents (source_id, collection_id, chunk_index, title, content, metadata) VALUES (?, ?, ?, ?, ?, ?)",
-			sourceID, collectionID, c.ChunkIndex, c.Title, c.Text, string(metaJSON),
-		)
-		if err != nil {
-			return "", fmt.Errorf("insert document: %w", err)
-		}
-		docID, _ := res.LastInsertId()
-		vecBytes := embeddings.SerializeFloat32(vecs[i])
-		_ = db.InsertEmbedding(conn, docID, vecBytes)
-	}
-
-	_ = now // used by upsertSource internally
-	slog.Info("indexed book", "title", book.Title, "type", sourceType, "chunks", len(chunks))
-	return "indexed", nil
 }
 
 func extractAndChunkBook(book *parser.CalibreBook, filePath, format string, cfg *config.Config, bookMeta map[string]any) []chunker.Chunk {

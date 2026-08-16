@@ -392,8 +392,13 @@ func isSourceUnchanged(conn *sql.DB, collectionID int64, sourcePath, currentHash
 	return storedHash.Valid && storedHash.String == currentHash
 }
 
-// indexSingleFile indexes one file into a collection. Returns true if indexed, false if skipped.
-func indexSingleFile(conn *sql.DB, cfg *config.Config, filePath string, collectionID int64, force bool) (bool, error) {
+// fileToItem prepares one file for indexing, or returns nil if it should be
+// skipped — unchanged since the last run, or nothing extractable.
+//
+// The cheap checks run first and in order: stat, then hash, then parse. Parsing
+// is the expensive step (PDF text extraction, OCR, tree-sitter), so it only
+// happens for files that are actually going to be re-embedded.
+func fileToItem(conn *sql.DB, cfg *config.Config, filePath string, collectionID int64, force bool) *indexItem {
 	absPath, _ := filepath.Abs(filePath)
 
 	info, statErr := os.Stat(filePath)
@@ -406,12 +411,13 @@ func indexSingleFile(conn *sql.DB, cfg *config.Config, filePath string, collecti
 	// opened, which matters most for cloud-backed files where a read is a
 	// download.
 	if !force && isSourceCurrent(conn, collectionID, absPath, mtime) {
-		return false, nil
+		return nil
 	}
 
 	fh, err := fileHash(filePath)
 	if err != nil {
-		return false, fmt.Errorf("hash %s: %w", filePath, err)
+		slog.Warn("cannot hash file, skipping", "path", filePath, "err", err)
+		return nil
 	}
 
 	ext := strings.ToLower(filepath.Ext(filePath))
@@ -428,29 +434,23 @@ func indexSingleFile(conn *sql.DB, cfg *config.Config, filePath string, collecti
 			"UPDATE sources SET file_modified_at = ?, last_indexed_at = ? WHERE collection_id = ? AND source_path = ?",
 			mtime, time.Now().UTC().Format(time.RFC3339), collectionID, absPath,
 		)
-		return false, nil
+		return nil
 	}
 
 	slog.Debug("parsing file", "path", filepath.Base(filePath), "type", sourceType)
 	chunks := parseAndChunk(filePath, sourceType, cfg)
 	if len(chunks) == 0 {
 		slog.Warn("no content extracted, skipping", "path", filePath)
-		return false, nil
+		return nil
 	}
 
-	slog.Debug("embedding chunks", "path", filepath.Base(filePath), "chunks", len(chunks))
-
-	sourceID, err := upsertSource(conn, collectionID, absPath, sourceType, fh, mtime)
-	if err != nil {
-		return false, err
+	return &indexItem{
+		SourcePath: absPath,
+		SourceType: sourceType,
+		Chunks:     chunks,
+		FileHash:   fh,
+		Mtime:      mtime,
 	}
-
-	if err := insertChunks(conn, sourceID, collectionID, chunks, cfg); err != nil {
-		return false, err
-	}
-
-	slog.Info("indexed file", "path", filepath.Base(filePath), "type", sourceType, "chunks", len(chunks))
-	return true, nil
 }
 
 // PruneResult summarises a pruning run.
@@ -539,23 +539,9 @@ func IndexProject(conn *sql.DB, cfg *config.Config, collectionName string, paths
 
 	slog.Info("project indexer: found files", "count", len(files), "collection", collectionName)
 
-	for i, f := range files {
-		if progress != nil {
-			progress(i+1, len(files), filepath.Base(f))
-		}
-		indexed, err := indexSingleFile(conn, cfg, f, collectionID, force)
-		if err != nil {
-			slog.Error("error indexing", "path", f, "err", err)
-			result.Errors++
-			result.ErrorMessages = append(result.ErrorMessages, err.Error())
-			continue
-		}
-		if indexed {
-			result.Indexed++
-		} else {
-			result.Skipped++
-		}
-	}
+	indexItemsBatched(conn, cfg, collectionID, collectionName, len(files),
+		func(i int) *indexItem { return fileToItem(conn, cfg, files[i], collectionID, force) },
+		result, progress)
 
 	slog.Info("project indexer done", "result", result.String())
 	return result
