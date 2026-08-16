@@ -8,6 +8,7 @@ import (
 
 	"github.com/sebastianhutter/local-rag-go/internal/chunker"
 	"github.com/sebastianhutter/local-rag-go/internal/config"
+	"github.com/sebastianhutter/local-rag-go/internal/db"
 )
 
 func testBatchConfig(batchSize int) *config.Config {
@@ -164,7 +165,7 @@ func TestWriteItemBatchEmbedError(t *testing.T) {
 		err:   fmt.Errorf("ollama unreachable"),
 	}
 	result := &IndexResult{}
-	writeItemBatch(conn, collID, b, result)
+	writeItemBatch(conn, collID, b, result, false)
 
 	if result.Errors != 3 {
 		t.Errorf("got %d errors, want 3 (one per item)", result.Errors)
@@ -185,7 +186,7 @@ func TestWriteItemBatchVectorCountMismatch(t *testing.T) {
 	b.vecs = [][]float32{make([]float32, 1024)} // one vector, two texts
 
 	result := &IndexResult{}
-	writeItemBatch(conn, collID, b, result)
+	writeItemBatch(conn, collID, b, result, false)
 
 	if result.Indexed != 0 {
 		t.Errorf("got %d indexed, want 0 on a count mismatch", result.Indexed)
@@ -220,7 +221,7 @@ func TestWriteItemBatchStoresPerItemRows(t *testing.T) {
 	}
 
 	result := &IndexResult{}
-	writeItemBatch(conn, collID, b, result)
+	writeItemBatch(conn, collID, b, result, false)
 
 	if result.Indexed != 3 {
 		t.Fatalf("got %d indexed, want 3", result.Indexed)
@@ -260,7 +261,7 @@ func TestWriteItemBatchCountsDroppedItems(t *testing.T) {
 	b := &itemBatch{dropped: 3}
 
 	result := &IndexResult{}
-	writeItemBatch(conn, collID, b, result)
+	writeItemBatch(conn, collID, b, result, false)
 
 	if result.Errors != 3 {
 		t.Errorf("got %d errors, want 3", result.Errors)
@@ -283,7 +284,7 @@ func TestWriteItemBatchPartialRecovery(t *testing.T) {
 	b.dropped = 1 // a third item failed and was removed
 
 	result := &IndexResult{}
-	writeItemBatch(conn, collID, b, result)
+	writeItemBatch(conn, collID, b, result, false)
 
 	if result.Indexed != 2 {
 		t.Errorf("got %d indexed, want 2 survivors stored", result.Indexed)
@@ -351,7 +352,7 @@ func TestWriteItemBatchReplacesExisting(t *testing.T) {
 
 	for pass := 1; pass <= 2; pass++ {
 		result := &IndexResult{}
-		writeItemBatch(conn, collID, newBatch(), result)
+		writeItemBatch(conn, collID, newBatch(), result, false)
 		if result.Errors != 0 {
 			t.Fatalf("pass %d: %d errors: %v", pass, result.Errors, result.ErrorMessages)
 		}
@@ -385,7 +386,7 @@ func TestPurgeSourceDocumentsLeavesOthersAlone(t *testing.T) {
 	for i := range b.vecs {
 		b.vecs[i] = make([]float32, 1024)
 	}
-	writeItemBatch(conn, collID, b, &IndexResult{})
+	writeItemBatch(conn, collID, b, &IndexResult{}, false)
 
 	// Purge only two of the four.
 	purgeSourceDocuments(conn, collID, all[:2])
@@ -398,5 +399,99 @@ func TestPurgeSourceDocumentsLeavesOthersAlone(t *testing.T) {
 	}
 	if vecs != 2 {
 		t.Errorf("got %d vectors, want 2 — purge must remove exactly the batch's embeddings", vecs)
+	}
+}
+
+// A rebuild clears the collection up front, so writeItemBatch must skip the
+// per-batch purge — that purge full-scans the vector table and is the single
+// most expensive thing in a force run.
+func TestPreClearedSkipsPurge(t *testing.T) {
+	conn := setupTestDB(t)
+	collID := mustGetOrCreate(t, conn, "rss", "system")
+
+	seed := func() {
+		b := collectBatches(makeItems(3, 1), testBatchConfig(32))[0]
+		b.vecs = make([][]float32, len(b.texts))
+		for i := range b.vecs {
+			b.vecs[i] = make([]float32, 1024)
+		}
+		writeItemBatch(conn, collID, b, &IndexResult{}, false)
+	}
+	seed()
+
+	// Clearing the collection is what a --force run does before indexing.
+	if err := db.ClearCollectionData(conn, collID); err != nil {
+		t.Fatal(err)
+	}
+	var docs, srcs int
+	conn.QueryRow("SELECT COUNT(*) FROM documents WHERE collection_id = ?", collID).Scan(&docs)
+	conn.QueryRow("SELECT COUNT(*) FROM sources WHERE collection_id = ?", collID).Scan(&srcs)
+	if docs != 0 || srcs != 0 {
+		t.Fatalf("clear left %d documents and %d sources", docs, srcs)
+	}
+
+	// With preCleared, writing the same items again must produce exactly one
+	// copy — no duplicates, no stranded vectors.
+	b := collectBatches(makeItems(3, 1), testBatchConfig(32))[0]
+	b.vecs = make([][]float32, len(b.texts))
+	for i := range b.vecs {
+		b.vecs[i] = make([]float32, 1024)
+	}
+	result := &IndexResult{}
+	writeItemBatch(conn, collID, b, result, true)
+
+	if result.Errors != 0 {
+		t.Fatalf("%d errors: %v", result.Errors, result.ErrorMessages)
+	}
+	var vecs int
+	conn.QueryRow("SELECT COUNT(*) FROM documents WHERE collection_id = ?", collID).Scan(&docs)
+	conn.QueryRow("SELECT COUNT(*) FROM vec_documents").Scan(&vecs)
+	if docs != 3 || vecs != 3 {
+		t.Errorf("got %d documents / %d vectors, want 3 / 3", docs, vecs)
+	}
+}
+
+// Rebuilding one repo must not wipe the other repos sharing its collection.
+func TestClearRepoForRebuildIsScoped(t *testing.T) {
+	conn := setupTestDB(t)
+	collID := mustGetOrCreate(t, conn, "code", "code")
+
+	items := makeItems(4, 1)
+	items[0].SourcePath = "/repos/alpha/main.go"
+	items[1].SourcePath = "/repos/alpha/util.go"
+	items[2].SourcePath = "/repos/beta/main.go"
+	items[3].SourcePath = "git:///repos/alpha#abc123"
+	for _, it := range items {
+		it.SourceType = "code"
+	}
+
+	b := collectBatches(items, testBatchConfig(32))[0]
+	b.vecs = make([][]float32, len(b.texts))
+	for i := range b.vecs {
+		b.vecs[i] = make([]float32, 1024)
+	}
+	writeItemBatch(conn, collID, b, &IndexResult{}, false)
+
+	if !clearRepoForRebuild(conn, collID, "/repos/alpha", true) {
+		t.Fatal("clearRepoForRebuild reported failure")
+	}
+
+	var remaining []string
+	rows, _ := conn.Query("SELECT source_path FROM sources WHERE collection_id = ? ORDER BY source_path", collID)
+	for rows.Next() {
+		var p string
+		rows.Scan(&p)
+		remaining = append(remaining, p)
+	}
+	rows.Close()
+
+	if len(remaining) != 1 || remaining[0] != "/repos/beta/main.go" {
+		t.Errorf("remaining sources = %v, want only beta's file", remaining)
+	}
+
+	var vecs int
+	conn.QueryRow("SELECT COUNT(*) FROM vec_documents").Scan(&vecs)
+	if vecs != 1 {
+		t.Errorf("got %d vectors, want 1 — alpha's embeddings should be gone, beta's kept", vecs)
 	}
 }

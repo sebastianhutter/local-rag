@@ -310,7 +310,7 @@ Config file location: `~/.local-rag/config.json`
   ],
   "embedding_batch_size": 32,
   "embedding_workers": 4,
-  "embedding_num_batch": 8192,
+  "embedding_num_batch": 0,
   "chunk_size_tokens": 500,
   "chunk_overlap_tokens": 50,
   "obsidian_vaults": [
@@ -365,9 +365,11 @@ Config file location: `~/.local-rag/config.json`
 
 Items are built lazily as batches fill, so memory is bounded to `embedding_workers × embedding_batch_size` chunks, and expensive extraction (PDF text, OCR, tree-sitter, `git show`) only runs for items that are actually going to be re-embedded — an unchanged file is never opened. Writes stay on one goroutine because SQLite takes no concurrent writers.
 
-**`embedding_num_batch`** (optional, default `8192`): sent to Ollama as the `num_batch` model option. llama.cpp must fit an entire embedding input into one *physical batch*, so an input longer than this is rejected with `input (N tokens) is too large to process` — even though Ollama has already truncated it to the model's context. With bge-m3's 8192-token context and Ollama's default physical batch of 2048, any chunk over ~2048 tokens fails. Setting this to the context length makes everything the model accepts also processable. Ollama applies it at model load, so the first request after a change reloads the model once (a second or two). `0` leaves the server default. Editable under **Settings → General**.
+**`embedding_num_batch`** (optional, default `0` = server default): sent to Ollama as the `num_batch` model option when non-zero. llama.cpp must fit an entire embedding input into one *physical batch*, so an input longer than this is rejected with `input (N tokens) is too large to process` — even though Ollama has already truncated it to the model's context. With bge-m3's 8192-token context and Ollama's default physical batch of 2048, any chunk over ~2048 tokens fails. Setting this to the context length makes everything the model accepts also processable. Measured throughput is unchanged by this option (53-56 texts/sec at 0, 2048, 4096 and 8192), but Ollama applies it at model load, so a non-zero value reloads the model once. Left at `0` by default; raise it only if the log shows inputs being rejected. Editable under **Settings → General**.
 
 Note that `chunk_size_tokens` counts whitespace-separated **words**, not model tokens, so dense content (code, minified data, non-English text) can produce chunks several times larger in tokens than the setting suggests. A batch whose embedding request fails is retried one item at a time, so a single unembeddable item costs only itself instead of discarding everything batched with it.
+
+`--force` clears the collection (or, for code, the repository) up front rather than purging batch by batch. Deleting from the vec0 vector tables filters on an un-indexed column and full-scans them, which at ~800k vectors costs ~6.6s per 512-item wave — comparable to the embedding it accompanies. Clearing once costs ~9s for the whole run and drops the per-wave write to ~80ms.
 
 **`skip_cloud_placeholders`** (optional, default `true`): skip files that exist only in the cloud. macOS marks on-demand files from OneDrive, iCloud Drive, Google Drive and Synology Drive with the `SF_DATALESS` flag — the name, size and mtime are local but the data is not. Opening one makes macOS download it from the provider first, so indexing a mostly-online folder is bounded by network speed and materialises the files on disk (a OneDrive shared library can be hundreds of GB). Placeholders are stat-ed but never opened, so a skipped file costs nothing; a per-path warning reports how many were skipped. Set to `false` to download and index them anyway, or mark the folders *Always Keep on This Device* in Finder. Editable under **Settings → General** (*Cloud Storage* card). Pruning is unaffected — a placeholder still exists on disk, so previously indexed content is not removed.
 

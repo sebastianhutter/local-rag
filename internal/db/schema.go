@@ -273,6 +273,88 @@ func DeleteEmbeddings(conn *sql.DB, documentIDs []any) error {
 	return nil
 }
 
+// ClearCollectionData removes every source, document and embedding belonging to
+// a collection, keeping the collection row itself.
+//
+// This is the bulk path for a full rebuild (--force). Deleting from the vec0
+// tables filters on the un-indexed document_id column, which forces a full scan
+// of the vector table — so a rebuild that purged batch by batch would pay that
+// scan hundreds of times. Clearing once up front costs two scans total.
+func ClearCollectionData(conn *sql.DB, collectionID int64) error {
+	tx, err := conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin clear tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	docSubquery := "SELECT id FROM documents WHERE collection_id = ?"
+
+	// Order matters: the vector rows resolve their document ids from the
+	// documents table, so they have to go first.
+	for _, table := range []string{"vec_documents_bin", "vec_documents"} {
+		if _, err := tx.Exec(
+			"DELETE FROM "+table+" WHERE document_id IN ("+docSubquery+")", collectionID,
+		); err != nil {
+			return fmt.Errorf("clear %s: %w", table, err)
+		}
+	}
+	if _, err := tx.Exec("DELETE FROM documents WHERE collection_id = ?", collectionID); err != nil {
+		return fmt.Errorf("clear documents: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM sources WHERE collection_id = ?", collectionID); err != nil {
+		return fmt.Errorf("clear sources: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit clear: %w", err)
+	}
+	slog.Info("cleared collection for rebuild", "collection_id", collectionID)
+	return nil
+}
+
+// ClearSourcesWithPrefix removes sources (and their documents and embeddings)
+// whose source_path starts with any of the given prefixes.
+//
+// A code collection can hold several repositories, so a rebuild of one repo
+// must not wipe its siblings. Same rationale as ClearCollectionData: two vector
+// scans up front instead of one per batch.
+func ClearSourcesWithPrefix(conn *sql.DB, collectionID int64, prefixes []string) error {
+	if len(prefixes) == 0 {
+		return nil
+	}
+
+	var where strings.Builder
+	args := []any{collectionID}
+	where.WriteString("collection_id = ? AND (")
+	for i, prefix := range prefixes {
+		if i > 0 {
+			where.WriteString(" OR ")
+		}
+		// substr rather than LIKE: paths routinely contain _ and %, which LIKE
+		// would treat as wildcards.
+		where.WriteString("substr(source_path, 1, ?) = ?")
+		args = append(args, len(prefix), prefix)
+	}
+	where.WriteString(")")
+
+	tx, err := conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin clear tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	docSubquery := "SELECT id FROM documents WHERE source_id IN (SELECT id FROM sources WHERE " + where.String() + ")"
+	for _, table := range []string{"vec_documents_bin", "vec_documents"} {
+		if _, err := tx.Exec("DELETE FROM "+table+" WHERE document_id IN ("+docSubquery+")", args...); err != nil {
+			return fmt.Errorf("clear %s: %w", table, err)
+		}
+	}
+	if _, err := tx.Exec("DELETE FROM sources WHERE "+where.String(), args...); err != nil {
+		return fmt.Errorf("clear sources: %w", err)
+	}
+	return tx.Commit()
+}
+
 // ErrCollectionTypeConflict is returned when a collection name is already in
 // use by a different kind of source.
 //

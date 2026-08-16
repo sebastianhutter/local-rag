@@ -46,9 +46,12 @@ func IndexObsidian(conn *sql.DB, cfg *config.Config, force bool, progress Progre
 
 	result := &IndexResult{TotalFound: len(allFiles)}
 
+	// A rebuild replaces everything, so clear once instead of purging per batch.
+	cleared := clearForRebuild(conn, collectionID, force)
+
 	indexItemsBatched(conn, cfg, collectionID, "obsidian", len(allFiles),
 		func(i int) *indexItem { return fileToItem(conn, cfg, allFiles[i], collectionID, force) },
-		result, progress)
+		result, progress, cleared)
 
 	slog.Info("obsidian indexing complete", "result", result.String())
 	return result

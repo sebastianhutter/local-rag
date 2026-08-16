@@ -48,11 +48,14 @@ func IndexCalibre(conn *sql.DB, cfg *config.Config, force bool, progress Progres
 
 	result := &IndexResult{TotalFound: len(allBooks)}
 
+	// A rebuild replaces everything, so clear once instead of purging per batch.
+	cleared := clearForRebuild(conn, collectionID, force)
+
 	indexItemsBatched(conn, cfg, collectionID, "calibre", len(allBooks),
 		func(i int) *indexItem {
 			return bookToItem(conn, cfg, collectionID, allBooks[i].libraryPath, allBooks[i].book, force)
 		},
-		result, progress)
+		result, progress, cleared)
 
 	slog.Info("calibre indexing complete", "result", result.String())
 	return result

@@ -51,9 +51,12 @@ func IndexRSS(conn *sql.DB, cfg *config.Config, force bool, progress ProgressCal
 
 	latestTS := sinceTS
 
+	// A rebuild replaces everything, so clear once instead of purging per batch.
+	cleared := clearForRebuild(conn, collectionID, force)
+
 	for _, accountDir := range accountDirs {
 		slog.Info("indexing RSS account", "dir", filepath.Base(accountDir))
-		acctResult, acctLatest := indexRSSAccount(conn, cfg, collectionID, accountDir, sinceTS, force, progress)
+		acctResult, acctLatest := indexRSSAccount(conn, cfg, collectionID, accountDir, sinceTS, force, progress, cleared)
 		result.Merge(acctResult)
 		if acctLatest > latestTS {
 			latestTS = acctLatest
@@ -68,7 +71,7 @@ func IndexRSS(conn *sql.DB, cfg *config.Config, force bool, progress ProgressCal
 	return result
 }
 
-func indexRSSAccount(conn *sql.DB, cfg *config.Config, collectionID int64, accountDir string, sinceTS float64, force bool, progress ProgressCallback) (*IndexResult, float64) {
+func indexRSSAccount(conn *sql.DB, cfg *config.Config, collectionID int64, accountDir string, sinceTS float64, force bool, progress ProgressCallback, cleared bool) (*IndexResult, float64) {
 	result := &IndexResult{}
 	latestTS := 0.0
 
@@ -109,7 +112,7 @@ func indexRSSAccount(conn *sql.DB, cfg *config.Config, collectionID int64, accou
 	// Pass 2 — chunk, embed in batches, write.
 	indexItemsBatched(conn, cfg, collectionID, "rss", len(todo),
 		func(i int) *indexItem { return articleToItem(todo[i], cfg) },
-		result, progress)
+		result, progress, cleared)
 
 	return result, latestTS
 }

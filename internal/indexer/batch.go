@@ -72,6 +72,7 @@ func indexItemsBatched(
 	itemAt itemFunc,
 	result *IndexResult,
 	progress ProgressCallback,
+	preCleared bool,
 ) {
 	if total == 0 {
 		return
@@ -117,7 +118,7 @@ func indexItemsBatched(
 		wg.Wait()
 
 		for _, batch := range wave {
-			writeItemBatch(conn, collectionID, batch, result)
+			writeItemBatch(conn, collectionID, batch, result, preCleared)
 
 			done += len(batch.items) + batch.dropped
 			if progress != nil && len(batch.items) > 0 {
@@ -238,7 +239,7 @@ func hasContent(chunks []chunker.Chunk) bool {
 
 // writeItemBatch stores an embedded batch, attributing failures per item so one
 // bad item does not sink the rest.
-func writeItemBatch(conn *sql.DB, collectionID int64, b *itemBatch, result *IndexResult) {
+func writeItemBatch(conn *sql.DB, collectionID int64, b *itemBatch, result *IndexResult, preCleared bool) {
 	// Items the individual retry could not embed are gone from b.items but still
 	// have to be counted.
 	if b.dropped > 0 {
@@ -268,8 +269,12 @@ func writeItemBatch(conn *sql.DB, collectionID int64, b *itemBatch, result *Inde
 	}
 
 	// Clear out the previous version of everything in this batch in one pass,
-	// before storing any of it.
-	purgeSourceDocuments(conn, collectionID, b.items)
+	// before storing any of it. Skipped when the whole collection was already
+	// cleared for a rebuild — the purge full-scans the vector table, so doing it
+	// per batch when there is provably nothing to remove is pure waste.
+	if !preCleared {
+		purgeSourceDocuments(conn, collectionID, b.items)
+	}
 
 	offset := 0
 	for _, item := range b.items {

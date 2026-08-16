@@ -303,7 +303,7 @@ func defaults() *Config {
 		EmbeddingDimensions:    1024,
 		EmbeddingBatchSize:     32,
 		EmbeddingWorkers:       4,
-		EmbeddingNumBatch:      8192,
+		EmbeddingNumBatch:      0,
 		ChunkSizeTokens:        500,
 		ChunkOverlapTokens:     50,
 		ObsidianVaults:         []string{},

@@ -58,6 +58,45 @@ func CheckNameConflict(cfg *config.Config, name string) error {
 	return nil
 }
 
+// clearForRebuild wipes a collection's indexed data when --force was given, so
+// the per-batch purge can be skipped entirely.
+//
+// Deleting from the vec0 vector tables filters on an un-indexed column and
+// full-scans them, which at ~800k vectors costs ~2s per batch — more than the
+// embedding it accompanies. A rebuild replaces everything anyway, so clearing
+// once up front pays that cost twice instead of once per batch.
+//
+// It returns whether the collection was cleared, which callers pass to
+// indexItemsBatched as preCleared.
+func clearForRebuild(conn *sql.DB, collectionID int64, force bool) bool {
+	if !force {
+		return false
+	}
+	if err := db.ClearCollectionData(conn, collectionID); err != nil {
+		slog.Error("could not clear collection for rebuild, falling back to per-batch purge", "err", err)
+		return false
+	}
+	return true
+}
+
+// clearRepoForRebuild is clearForRebuild scoped to a single repository, since a
+// code collection can hold many and rebuilding one must not wipe its siblings.
+func clearRepoForRebuild(conn *sql.DB, collectionID int64, repoPath string, force bool) bool {
+	if !force {
+		return false
+	}
+	prefixes := []string{
+		repoPath + string(filepath.Separator), // tracked files
+		"git://" + repoPath + "#",             // commit history
+	}
+	if err := db.ClearSourcesWithPrefix(conn, collectionID, prefixes); err != nil {
+		slog.Error("could not clear repo for rebuild, falling back to per-batch purge",
+			"repo", repoPath, "err", err)
+		return false
+	}
+	return true
+}
+
 // embed wraps embeddings.GetEmbeddings for convenience.
 func embed(texts []string, cfg *config.Config) ([][]float32, error) {
 	return embeddings.GetEmbeddings(context.Background(), texts, cfg.EmbeddingModel)
@@ -547,11 +586,14 @@ func IndexProject(conn *sql.DB, cfg *config.Config, collectionName string, paths
 	files := collectFiles(paths, cfg.SkipCloudPlaceholders)
 	result := &IndexResult{TotalFound: len(files)}
 
+	// A rebuild replaces everything, so clear once instead of purging per batch.
+	cleared := clearForRebuild(conn, collectionID, force)
+
 	slog.Info("project indexer: found files", "count", len(files), "collection", collectionName)
 
 	indexItemsBatched(conn, cfg, collectionID, collectionName, len(files),
 		func(i int) *indexItem { return fileToItem(conn, cfg, files[i], collectionID, force) },
-		result, progress)
+		result, progress, cleared)
 
 	slog.Info("project indexer done", "result", result.String())
 	return result

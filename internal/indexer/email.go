@@ -59,9 +59,12 @@ func IndexEmails(conn *sql.DB, cfg *config.Config, force bool, progress Progress
 
 	latestDate := sinceDate
 
+	// A rebuild replaces everything, so clear once instead of purging per batch.
+	cleared := clearForRebuild(conn, collectionID, force)
+
 	for _, accountDir := range accountDirs {
 		slog.Info("indexing email account", "dir", filepath.Base(accountDir))
-		acctResult, acctLatest := indexEmailAccount(conn, cfg, collectionID, accountDir, sinceDate, force, progress)
+		acctResult, acctLatest := indexEmailAccount(conn, cfg, collectionID, accountDir, sinceDate, force, progress, cleared)
 		result.Merge(acctResult)
 		if acctLatest > latestDate {
 			latestDate = acctLatest
@@ -76,7 +79,7 @@ func IndexEmails(conn *sql.DB, cfg *config.Config, force bool, progress Progress
 	return result
 }
 
-func indexEmailAccount(conn *sql.DB, cfg *config.Config, collectionID int64, accountDir, sinceDate string, force bool, progress ProgressCallback) (*IndexResult, string) {
+func indexEmailAccount(conn *sql.DB, cfg *config.Config, collectionID int64, accountDir, sinceDate string, force bool, progress ProgressCallback, cleared bool) (*IndexResult, string) {
 	result := &IndexResult{}
 	latestDate := ""
 
@@ -117,7 +120,7 @@ func indexEmailAccount(conn *sql.DB, cfg *config.Config, collectionID int64, acc
 	// Pass 2 — chunk, embed in batches, write.
 	indexItemsBatched(conn, cfg, collectionID, "email", len(todo),
 		func(i int) *indexItem { return emailToItem(todo[i], cfg) },
-		result, progress)
+		result, progress, cleared)
 
 	return result, latestDate
 }

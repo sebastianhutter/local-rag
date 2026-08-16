@@ -105,7 +105,7 @@ func IndexGitRepo(conn *sql.DB, cfg *config.Config, repoPath, collectionName str
 		if oldSHA == headSHA {
 			slog.Info("no new commits since last index", "sha", headSHA[:12])
 			if indexHistory {
-				return indexGitHistory(conn, cfg, repoPath, collectionID, force, cfg.GitHistoryInMonths)
+				return indexGitHistory(conn, cfg, repoPath, collectionID, force, cfg.GitHistoryInMonths, false)
 			}
 			return &IndexResult{}
 		}
@@ -156,9 +156,13 @@ func IndexGitRepo(conn *sql.DB, cfg *config.Config, repoPath, collectionName str
 	result := &IndexResult{TotalFound: len(indexable)}
 	slog.Info("indexing code files", "count", len(indexable), "collection", collectionName)
 
+	// A rebuild replaces this repo's data. Clear it once rather than purging per
+	// batch — but scoped to this repo, since a code collection can hold several.
+	cleared := clearRepoForRebuild(conn, collectionID, repoPath, force)
+
 	indexItemsBatched(conn, cfg, collectionID, collectionName, len(indexable),
 		func(i int) *indexItem { return codeFileToItem(conn, cfg, repoPath, indexable[i], collectionID, force) },
-		result, progress)
+		result, progress, cleared)
 
 	// Advance the watermark only on a clean run. It records "everything up to
 	// HEAD is indexed", and the next run only looks at files changed since it —
@@ -176,7 +180,7 @@ func IndexGitRepo(conn *sql.DB, cfg *config.Config, repoPath, collectionName str
 	slog.Info("git indexer done", "result", result.String())
 
 	if indexHistory {
-		histResult := indexGitHistory(conn, cfg, repoPath, collectionID, force, cfg.GitHistoryInMonths)
+		histResult := indexGitHistory(conn, cfg, repoPath, collectionID, force, cfg.GitHistoryInMonths, cleared)
 		result.Merge(histResult)
 	}
 
@@ -316,7 +320,7 @@ func codeBlocksToChunks(doc *parser.CodeDocument, relPath string, cfg *config.Co
 	return chunks
 }
 
-func indexGitHistory(conn *sql.DB, cfg *config.Config, repoPath string, collectionID int64, force bool, months int) *IndexResult {
+func indexGitHistory(conn *sql.DB, cfg *config.Config, repoPath string, collectionID int64, force bool, months int, cleared bool) *IndexResult {
 	repoKey := repoPath
 	historyKey := repoKey + ":history"
 
@@ -366,7 +370,7 @@ func indexGitHistory(conn *sql.DB, cfg *config.Config, repoPath string, collecti
 		func(i int) *indexItem {
 			return commitToItem(conn, cfg, repoPath, repoKey, collectionID, commits[i], force)
 		},
-		result, nil)
+		result, nil, cleared)
 
 	// Only on a clean run — see the file watermark above. A commit skipped
 	// because of an error would otherwise fall behind the watermark forever.
