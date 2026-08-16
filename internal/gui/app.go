@@ -68,6 +68,7 @@ func Run() error {
 	// local). Sets OLLAMA_HOST for the whole GUI process — indexing and MCP.
 	embeddings.ResolveHost(cfg.EmbeddingHosts, cfg.EmbeddingModel)
 	embeddings.SetBatchSize(cfg.EmbeddingBatchSize)
+	embeddings.SetNumBatch(cfg.EmbeddingNumBatch)
 
 	// Set up log file — truncate on startup so each session starts fresh.
 	logPath := filepath.Join(config.DefaultConfigDir, "local-rag.log")

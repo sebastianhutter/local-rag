@@ -159,6 +159,18 @@ func (a *App) buildGeneralTab(cfg *config.Config, w fyne.Window) fyne.CanvasObje
 		}
 	}
 
+	// llama.cpp must fit an entire embedding input into one physical batch, so
+	// a chunk longer than this is rejected outright. Matching the model's
+	// context length means anything Ollama accepts can also be processed.
+	numBatchEntry := widget.NewEntry()
+	numBatchEntry.SetText(strconv.Itoa(cfg.EmbeddingNumBatch))
+	numBatchEntry.Validator = intValidator(0, 65536)
+	numBatchEntry.OnChanged = func(s string) {
+		if v, err := strconv.Atoi(s); err == nil {
+			cfg.EmbeddingNumBatch = v
+		}
+	}
+
 	chunkEntry := widget.NewEntry()
 	chunkEntry.SetText(strconv.Itoa(cfg.ChunkSizeTokens))
 	chunkEntry.Validator = intValidator(50, 10000)
@@ -192,6 +204,7 @@ func (a *App) buildGeneralTab(cfg *config.Config, w fyne.Window) fyne.CanvasObje
 		widget.NewFormItem("Embedding dimensions", dimEntry),
 		widget.NewFormItem("Embedding batch size", batchEntry),
 		widget.NewFormItem("Embedding workers", workersEntry),
+		widget.NewFormItem("Ollama num_batch (0 = server default)", numBatchEntry),
 		widget.NewFormItem("Chunk size (tokens)", chunkEntry),
 		widget.NewFormItem("Chunk overlap (tokens)", overlapEntry),
 	)

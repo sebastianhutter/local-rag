@@ -45,6 +45,10 @@ type itemBatch struct {
 	texts []string    // all chunk texts, flattened in item then chunk order
 	vecs  [][]float32 // filled in by the embedding worker
 	err   error
+
+	// dropped counts items removed by the individual-retry fallback. They are
+	// no longer in items, but still have to be reported and counted.
+	dropped int
 }
 
 // itemFunc returns the item at index i, or nil to skip it — unchanged since the
@@ -105,6 +109,9 @@ func indexItemsBatched(
 			go func(batch *itemBatch) {
 				defer wg.Done()
 				batch.vecs, batch.err = embed(batch.texts, cfg)
+				if batch.err != nil {
+					embedItemsIndividually(batch, cfg)
+				}
 			}(batch)
 		}
 		wg.Wait()
@@ -112,12 +119,62 @@ func indexItemsBatched(
 		for _, batch := range wave {
 			writeItemBatch(conn, collectionID, batch, result)
 
-			done += len(batch.items)
-			if progress != nil {
+			done += len(batch.items) + batch.dropped
+			if progress != nil && len(batch.items) > 0 {
 				progress(done, total, batch.items[len(batch.items)-1].Title)
 			}
 		}
 	}
+}
+
+// embedItemsIndividually retries a failed batch one item at a time, so a single
+// unembeddable item costs only itself.
+//
+// Batching means one rejected input fails the whole request — Ollama refuses an
+// input longer than the physical batch ("input (N tokens) is too large to
+// process"), and a single oversized chunk would otherwise discard every other
+// item that happened to travel with it. Items that succeed on retry keep their
+// embeddings; the ones that genuinely fail are marked so writeItemBatch reports
+// them individually.
+func embedItemsIndividually(b *itemBatch, cfg *config.Config) {
+	slog.Warn("embedding batch failed, retrying items individually",
+		"items", len(b.items), "err", b.err)
+
+	kept := make([]*indexItem, 0, len(b.items))
+	texts := make([]string, 0, len(b.texts))
+	vecs := make([][]float32, 0, len(b.texts))
+	var failed int
+
+	for _, item := range b.items {
+		itemTexts := make([]string, len(item.Chunks))
+		for i, c := range item.Chunks {
+			itemTexts[i] = c.Text
+		}
+
+		itemVecs, err := embed(itemTexts, cfg)
+		if err != nil || len(itemVecs) != len(itemTexts) {
+			failed++
+			if failed <= 5 {
+				slog.Warn("skipping item that cannot be embedded",
+					"type", item.SourceType, "path", item.SourcePath,
+					"chunks", len(item.Chunks), "err", err)
+			}
+			continue
+		}
+
+		kept = append(kept, item)
+		texts = append(texts, itemTexts...)
+		vecs = append(vecs, itemVecs...)
+	}
+
+	if failed > 0 {
+		slog.Warn("items dropped from batch", "failed", failed, "recovered", len(kept))
+	}
+
+	// Rebuild the batch around only what embedded successfully, so the offsets
+	// writeItemBatch relies on still line up.
+	b.items, b.texts, b.vecs, b.err = kept, texts, vecs, nil
+	b.dropped = failed
 }
 
 // itemBatcher walks items in order, grouping them into batches of roughly
@@ -182,6 +239,14 @@ func hasContent(chunks []chunker.Chunk) bool {
 // writeItemBatch stores an embedded batch, attributing failures per item so one
 // bad item does not sink the rest.
 func writeItemBatch(conn *sql.DB, collectionID int64, b *itemBatch, result *IndexResult) {
+	// Items the individual retry could not embed are gone from b.items but still
+	// have to be counted.
+	if b.dropped > 0 {
+		result.Errors += b.dropped
+		msg := fmt.Sprintf("%d item(s) could not be embedded and were skipped", b.dropped)
+		result.ErrorMessages = append(result.ErrorMessages, msg)
+	}
+
 	if b.err != nil {
 		result.Errors += len(b.items)
 		if result.Errors <= 10 {

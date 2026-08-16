@@ -18,6 +18,7 @@ func resolveEmbeddingHost() {
 	if cfg, err := config.Load(""); err == nil {
 		embeddings.ResolveHost(cfg.EmbeddingHosts, cfg.EmbeddingModel)
 		embeddings.SetBatchSize(cfg.EmbeddingBatchSize)
+		embeddings.SetNumBatch(cfg.EmbeddingNumBatch)
 	}
 }
 

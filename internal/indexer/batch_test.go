@@ -249,6 +249,50 @@ func TestWriteItemBatchStoresPerItemRows(t *testing.T) {
 	}
 }
 
+// Items the individual retry could not embed are removed from the batch, so
+// they must still be counted as errors rather than vanishing from the totals.
+func TestWriteItemBatchCountsDroppedItems(t *testing.T) {
+	conn := setupTestDB(t)
+	collID := mustGetOrCreate(t, conn, "rss", "system")
+
+	// What embedItemsIndividually leaves behind when every item failed: no
+	// items, no texts, no error, but a dropped count.
+	b := &itemBatch{dropped: 3}
+
+	result := &IndexResult{}
+	writeItemBatch(conn, collID, b, result)
+
+	if result.Errors != 3 {
+		t.Errorf("got %d errors, want 3", result.Errors)
+	}
+	if result.Indexed != 0 {
+		t.Errorf("got %d indexed, want 0", result.Indexed)
+	}
+	if len(result.ErrorMessages) == 0 {
+		t.Error("dropped items should be reported")
+	}
+}
+
+// A partially recovered batch stores what survived and counts what did not.
+func TestWriteItemBatchPartialRecovery(t *testing.T) {
+	conn := setupTestDB(t)
+	collID := mustGetOrCreate(t, conn, "rss", "system")
+
+	b := collectBatches(makeItems(2, 1), testBatchConfig(32))[0]
+	b.vecs = [][]float32{make([]float32, 1024), make([]float32, 1024)}
+	b.dropped = 1 // a third item failed and was removed
+
+	result := &IndexResult{}
+	writeItemBatch(conn, collID, b, result)
+
+	if result.Indexed != 2 {
+		t.Errorf("got %d indexed, want 2 survivors stored", result.Indexed)
+	}
+	if result.Errors != 1 {
+		t.Errorf("got %d errors, want 1 for the dropped item", result.Errors)
+	}
+}
+
 // Item metadata describes the whole source (sender, feed, book author); chunk
 // metadata describes one chunk (page number, symbol path). Both must survive,
 // and the chunk's own keys must win.

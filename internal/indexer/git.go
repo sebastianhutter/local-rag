@@ -160,10 +160,18 @@ func IndexGitRepo(conn *sql.DB, cfg *config.Config, repoPath, collectionName str
 		func(i int) *indexItem { return codeFileToItem(conn, cfg, repoPath, indexable[i], collectionID, force) },
 		result, progress)
 
-	// Update watermark
-	watermarks[repoKey] = headSHA
-	conn.Exec("UPDATE collections SET description = ? WHERE id = ?",
-		makeWatermarks(watermarks), collectionID)
+	// Advance the watermark only on a clean run. It records "everything up to
+	// HEAD is indexed", and the next run only looks at files changed since it —
+	// so moving it past a failure (an unembeddable file, Ollama being down)
+	// would mean that file is never retried until it happens to change again.
+	if result.Errors == 0 {
+		watermarks[repoKey] = headSHA
+		conn.Exec("UPDATE collections SET description = ? WHERE id = ?",
+			makeWatermarks(watermarks), collectionID)
+	} else {
+		slog.Warn("not advancing watermark: run had errors, files will be retried next run",
+			"errors", result.Errors, "repo", repoPath)
+	}
 
 	slog.Info("git indexer done", "result", result.String())
 
@@ -360,10 +368,16 @@ func indexGitHistory(conn *sql.DB, cfg *config.Config, repoPath string, collecti
 		},
 		result, nil)
 
-	// Update history watermark
-	watermarks[historyKey] = newestSHA
-	conn.Exec("UPDATE collections SET description = ? WHERE id = ?",
-		makeWatermarks(watermarks), collectionID)
+	// Only on a clean run — see the file watermark above. A commit skipped
+	// because of an error would otherwise fall behind the watermark forever.
+	if result.Errors == 0 {
+		watermarks[historyKey] = newestSHA
+		conn.Exec("UPDATE collections SET description = ? WHERE id = ?",
+			makeWatermarks(watermarks), collectionID)
+	} else {
+		slog.Warn("not advancing history watermark: run had errors, commits will be retried next run",
+			"errors", result.Errors, "repo", repoPath)
+	}
 
 	slog.Info("history indexer done", "result", result.String())
 	return result

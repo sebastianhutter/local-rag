@@ -40,6 +40,34 @@ func SetBatchSize(n int) {
 	}
 }
 
+// numBatch, when non-zero, is sent as the num_batch model option.
+//
+// llama.cpp must fit an entire embedding input into one physical batch, so an
+// input longer than num_batch is rejected with "input (N tokens) is too large
+// to process" — even though Ollama already truncated it to the model's context.
+// With bge-m3's 8192-token context and Ollama's default physical batch of 2048,
+// any chunk over ~2048 tokens fails. Raising num_batch to the context length
+// makes every input the model will accept also processable.
+//
+// Ollama applies this when it loads the model, so changing it reloads the model
+// once (a second or two for an embedding model), after which it costs nothing.
+var numBatch int
+
+// SetNumBatch sets the num_batch model option. Zero leaves the server default.
+func SetNumBatch(n int) {
+	if n >= 0 {
+		numBatch = n
+	}
+}
+
+// modelOptions returns the per-request model options, or nil when none are set.
+func modelOptions() map[string]any {
+	if numBatch <= 0 {
+		return nil
+	}
+	return map[string]any{"num_batch": numBatch}
+}
+
 // OllamaConnectionError indicates that Ollama is not reachable.
 type OllamaConnectionError struct {
 	Err error
@@ -186,8 +214,9 @@ func GetEmbeddings(ctx context.Context, texts []string, model string) ([][]float
 
 		reqCtx, cancel := context.WithTimeout(ctx, Timeout)
 		resp, err := client.Embed(reqCtx, &api.EmbedRequest{
-			Model: model,
-			Input: batch,
+			Model:   model,
+			Input:   batch,
+			Options: modelOptions(),
 		})
 		cancel()
 

@@ -51,6 +51,7 @@ type Config struct {
 	EmbeddingHosts            []string            `json:"embedding_hosts"`
 	EmbeddingBatchSize        int                 `json:"embedding_batch_size"`
 	EmbeddingWorkers          int                 `json:"embedding_workers"`
+	EmbeddingNumBatch         int                 `json:"embedding_num_batch"`
 	ChunkSizeTokens           int                 `json:"chunk_size_tokens"`
 	ChunkOverlapTokens        int                 `json:"chunk_overlap_tokens"`
 	ObsidianVaults            []string            `json:"obsidian_vaults"`
@@ -257,6 +258,7 @@ func Save(cfg *Config, path string) error {
 	existing["embedding_hosts"] = cfg.EmbeddingHosts
 	existing["embedding_batch_size"] = cfg.EmbeddingBatchSize
 	existing["embedding_workers"] = cfg.EmbeddingWorkers
+	existing["embedding_num_batch"] = cfg.EmbeddingNumBatch
 	existing["chunk_size_tokens"] = cfg.ChunkSizeTokens
 	existing["chunk_overlap_tokens"] = cfg.ChunkOverlapTokens
 	existing["obsidian_vaults"] = cfg.ObsidianVaults
@@ -301,6 +303,7 @@ func defaults() *Config {
 		EmbeddingDimensions:    1024,
 		EmbeddingBatchSize:     32,
 		EmbeddingWorkers:       4,
+		EmbeddingNumBatch:      8192,
 		ChunkSizeTokens:        500,
 		ChunkOverlapTokens:     50,
 		ObsidianVaults:         []string{},
