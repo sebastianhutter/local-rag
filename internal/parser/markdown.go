@@ -19,10 +19,40 @@ type MarkdownDocument struct {
 	Links       []string
 }
 
+// Wikilink and embed syntax. Kept as strings so they can be appended to
+// codeRegionPattern as a trailing alternative (see replaceOutsideCode).
+const (
+	embedPattern    = `!\[\[([^\]]+)\]\]`
+	wikilinkPattern = `\[\[([^\]]+)\]\]`
+)
+
+// codeRegionPattern matches the parts of a markdown note that link extraction
+// must leave alone: ``` and ~~~ fenced blocks and inline backtick spans. Both
+// fence forms require a closing fence, so an unclosed fence does not swallow
+// the rest of the note; the content in between is matched line by line, which
+// also allows an empty block. Any amount of leading whitespace is accepted:
+// CommonMark caps fence indentation at three spaces, but Obsidian renders a
+// deeper one as code all the same, and notes that nest fences several list
+// levels down are common.
+const codeRegionPattern = "(?m:^[ \t]*`{3,}[^\n]*\n(?:[^\n]*\n)*?[ \t]*`{3,}[ \t]*$)" +
+	"|(?m:^[ \t]*~{3,}[^\n]*\n(?:[^\n]*\n)*?[ \t]*~{3,}[ \t]*$)" +
+	"|`[^`\n]+`"
+
 var (
 	frontmatterRE = regexp.MustCompile(`(?s)\A---\s*\n(.*?\n)---\s*\n?`)
-	wikilinkRE    = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
-	embedRE       = regexp.MustCompile(`!\[\[([^\]]+)\]\]`)
+	wikilinkRE    = regexp.MustCompile(wikilinkPattern)
+	embedRE       = regexp.MustCompile(embedPattern)
+
+	// Code regions are prepended as earlier alternatives so that a match
+	// starting inside code is claimed by the code region and handed back
+	// untouched. Without this, bash and Python constructs such as
+	// `[[ -z "$x" ]]`, `[[:space:]]` and `Callable[[dict[str, Any]], None]`
+	// are read as wikilinks: they produce junk link metadata and, because
+	// conversion rewrites the body that gets chunked and embedded, corrupt
+	// the indexed code itself.
+	embedOutsideCodeRE    = regexp.MustCompile(codeRegionPattern + "|" + embedPattern)
+	wikilinkOutsideCodeRE = regexp.MustCompile(codeRegionPattern + "|" + wikilinkPattern)
+
 	dataviewRE    = regexp.MustCompile("(?s)```dataview\\s*\\n.*?\\n```")
 	inlineTagRE   = regexp.MustCompile(`(?:^|\s)#([\w][\w/\-]*)`)
 	codeBlockRE   = regexp.MustCompile("(?s)```.*?```")
@@ -92,9 +122,25 @@ func extractFrontmatter(text string) (map[string]any, string) {
 	return fm, remaining
 }
 
+// replaceOutsideCode rewrites every match of target that lies outside a code
+// region and leaves code regions byte-identical. combined must be
+// codeRegionPattern followed by target's own pattern as the final alternative:
+// the regexp engine prefers the leftmost match and, among those, the earliest
+// alternative, so anything inside code is returned as-is.
+func replaceOutsideCode(text string, combined, target *regexp.Regexp, repl func(match string) string) string {
+	return combined.ReplaceAllStringFunc(text, func(match string) string {
+		// A code region never matches target in full: it starts with a
+		// backtick or a tilde, and an inline span keeps its delimiters.
+		if target.FindString(match) != match {
+			return match
+		}
+		return repl(match)
+	})
+}
+
 func extractEmbeds(text string) (string, []string) {
 	var embeds []string
-	cleaned := embedRE.ReplaceAllStringFunc(text, func(match string) string {
+	cleaned := replaceOutsideCode(text, embedOutsideCodeRE, embedRE, func(match string) string {
 		sub := embedRE.FindStringSubmatch(match)
 		if len(sub) > 1 {
 			embeds = append(embeds, sub[1])
@@ -106,7 +152,7 @@ func extractEmbeds(text string) (string, []string) {
 
 func convertWikilinks(text string) (string, []string) {
 	var links []string
-	converted := wikilinkRE.ReplaceAllStringFunc(text, func(match string) string {
+	converted := replaceOutsideCode(text, wikilinkOutsideCodeRE, wikilinkRE, func(match string) string {
 		sub := wikilinkRE.FindStringSubmatch(match)
 		if len(sub) < 2 {
 			return match
