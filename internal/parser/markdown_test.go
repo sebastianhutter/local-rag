@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -192,4 +193,94 @@ func equalStrings(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+func TestParseMarkdownFrontmatterLinks(t *testing.T) {
+	tests := []struct {
+		name          string
+		input         string
+		wantLinks     []string
+		wantPropLinks map[string][]string
+	}{
+		{
+			name:      "related list",
+			input:     "---\nrelated:\n  - \"[[Atlas AWS Referenzarchitektur]]\"\n  - \"[[Prozessdiagramm Indexierung]]\"\n---\n\nBody with no links.\n",
+			wantLinks: []string{"Atlas AWS Referenzarchitektur", "Prozessdiagramm Indexierung"},
+			wantPropLinks: map[string][]string{
+				"related": {"Atlas AWS Referenzarchitektur", "Prozessdiagramm Indexierung"},
+			},
+		},
+		{
+			name:      "single string property",
+			input:     "---\nparent: \"[[Info Platform]]\"\n---\n\nBody.\n",
+			wantLinks: []string{"Info Platform"},
+			wantPropLinks: map[string][]string{
+				"parent": {"Info Platform"},
+			},
+		},
+		{
+			name:      "display text keeps only the target",
+			input:     "---\nauthor: \"[[Gene Kim|Gene]]\"\n---\n\nBody.\n",
+			wantLinks: []string{"Gene Kim"},
+			wantPropLinks: map[string][]string{
+				"author": {"Gene Kim"},
+			},
+		},
+		{
+			name:      "body and frontmatter links merge, body first",
+			input:     "---\nrelated:\n  - \"[[From Frontmatter]]\"\n---\n\nSee [[From Body]].\n",
+			wantLinks: []string{"From Body", "From Frontmatter"},
+			wantPropLinks: map[string][]string{
+				"related": {"From Frontmatter"},
+			},
+		},
+		{
+			name:          "duplicate across body and frontmatter appears once",
+			input:         "---\nrelated:\n  - \"[[Shared Note]]\"\n---\n\nSee [[Shared Note]].\n",
+			wantLinks:     []string{"Shared Note"},
+			wantPropLinks: map[string][]string{"related": {"Shared Note"}},
+		},
+		{
+			name:          "properties without wikilinks are ignored",
+			input:         "---\ntags:\n  - copebit\nstatus: draft\ncount: 3\n---\n\nBody.\n",
+			wantLinks:     nil,
+			wantPropLinks: nil,
+		},
+		{
+			name:          "multiple properties are ordered by property name",
+			input:         "---\nzeta: \"[[Z Note]]\"\nalpha: \"[[A Note]]\"\n---\n\nBody.\n",
+			wantLinks:     []string{"A Note", "Z Note"},
+			wantPropLinks: map[string][]string{"alpha": {"A Note"}, "zeta": {"Z Note"}},
+		},
+		{
+			name:          "nested map value is walked",
+			input:         "---\nmeta:\n  source: \"[[Nested Note]]\"\n---\n\nBody.\n",
+			wantLinks:     []string{"Nested Note"},
+			wantPropLinks: map[string][]string{"meta": {"Nested Note"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := ParseMarkdown(tt.input, "note.md")
+			if !reflect.DeepEqual(doc.Links, tt.wantLinks) {
+				t.Errorf("Links = %#v, want %#v", doc.Links, tt.wantLinks)
+			}
+			if !reflect.DeepEqual(doc.PropertyLinks, tt.wantPropLinks) {
+				t.Errorf("PropertyLinks = %#v, want %#v", doc.PropertyLinks, tt.wantPropLinks)
+			}
+		})
+	}
+}
+
+// A wikilink in frontmatter must not survive in the indexed body: the whole
+// frontmatter block is stripped before chunking.
+func TestParseMarkdownFrontmatterNotInBody(t *testing.T) {
+	doc := ParseMarkdown("---\nrelated:\n  - \"[[Other Note]]\"\n---\n\nJust prose.\n", "note.md")
+	if strings.Contains(doc.BodyText, "Other Note") {
+		t.Errorf("frontmatter leaked into body: %q", doc.BodyText)
+	}
+	if doc.BodyText != "Just prose." {
+		t.Errorf("BodyText = %q, want %q", doc.BodyText, "Just prose.")
+	}
 }

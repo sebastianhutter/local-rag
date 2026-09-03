@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -17,6 +18,14 @@ type MarkdownDocument struct {
 	Frontmatter map[string]any
 	Tags        []string
 	Links       []string
+
+	// PropertyLinks holds the wikilinks declared in frontmatter properties,
+	// keyed by property name — "related", "parent", "author" and so on.
+	// Obsidian resolves these like body links, and because a human wrote
+	// them into a named property they carry a relation type that a link in
+	// prose does not. Every target also appears in Links, so callers that
+	// only want the flat set can ignore this field.
+	PropertyLinks map[string][]string
 }
 
 // Wikilink and embed syntax. Kept as strings so they can be appended to
@@ -72,6 +81,9 @@ func ParseMarkdown(text, filename string) *MarkdownDocument {
 	var links []string
 	body, links = convertWikilinks(body)
 
+	propertyLinks := extractPropertyLinks(frontmatter)
+	links = mergeLinks(links, propertyLinks)
+
 	tags := extractTags(body, frontmatter)
 
 	title, _ := frontmatter["title"].(string)
@@ -84,11 +96,12 @@ func ParseMarkdown(text, filename string) *MarkdownDocument {
 	body = strings.TrimSpace(body)
 
 	return &MarkdownDocument{
-		Title:       title,
-		BodyText:    body,
-		Frontmatter: frontmatter,
-		Tags:        tags,
-		Links:       links,
+		Title:         title,
+		BodyText:      body,
+		Frontmatter:   frontmatter,
+		Tags:          tags,
+		Links:         links,
+		PropertyLinks: propertyLinks,
 	}
 }
 
@@ -168,6 +181,99 @@ func convertWikilinks(text string) (string, []string) {
 		return strings.TrimSpace(inner)
 	})
 	return converted, links
+}
+
+// extractPropertyLinks pulls the wikilink targets out of frontmatter values,
+// keyed by the property that declared them. Frontmatter is stripped from the
+// body before wikilink conversion runs, so without this pass a note that
+// records its relations as `related: ["[[Other Note]]"]` contributes no links
+// at all — and those are the most deliberate links in a vault.
+//
+// Values are walked recursively because YAML lets a property hold a string, a
+// list or a nested map. The frontmatter itself is left untouched: it is copied
+// verbatim into chunk metadata, and rewriting it there would change what
+// metadata filters match.
+func extractPropertyLinks(frontmatter map[string]any) map[string][]string {
+	if len(frontmatter) == 0 {
+		return nil
+	}
+	out := make(map[string][]string)
+	for key, value := range frontmatter {
+		seen := make(map[string]bool)
+		var targets []string
+		var walk func(v any)
+		walk = func(v any) {
+			switch tv := v.(type) {
+			case string:
+				for _, target := range wikilinkTargets(tv) {
+					if !seen[target] {
+						seen[target] = true
+						targets = append(targets, target)
+					}
+				}
+			case []any:
+				for _, item := range tv {
+					walk(item)
+				}
+			case map[string]any:
+				for _, item := range tv {
+					walk(item)
+				}
+			}
+		}
+		walk(value)
+		if len(targets) > 0 {
+			out[key] = targets
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// wikilinkTargets returns the link targets in a frontmatter string. The
+// `[[target|display]]` form keeps only the target, matching convertWikilinks.
+func wikilinkTargets(text string) []string {
+	var targets []string
+	for _, match := range wikilinkRE.FindAllStringSubmatch(text, -1) {
+		inner := match[1]
+		if idx := strings.Index(inner, "|"); idx >= 0 {
+			inner = inner[:idx]
+		}
+		if target := strings.TrimSpace(inner); target != "" {
+			targets = append(targets, target)
+		}
+	}
+	return targets
+}
+
+// mergeLinks appends the property link targets to the body links, dropping
+// duplicates and keeping body order first. Property names are sorted so the
+// result does not depend on Go's map iteration order.
+func mergeLinks(bodyLinks []string, propertyLinks map[string][]string) []string {
+	if len(propertyLinks) == 0 {
+		return bodyLinks
+	}
+	seen := make(map[string]bool, len(bodyLinks))
+	for _, l := range bodyLinks {
+		seen[l] = true
+	}
+	keys := make([]string, 0, len(propertyLinks))
+	for key := range propertyLinks {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	merged := bodyLinks
+	for _, key := range keys {
+		for _, target := range propertyLinks[key] {
+			if !seen[target] {
+				seen[target] = true
+				merged = append(merged, target)
+			}
+		}
+	}
+	return merged
 }
 
 func extractTags(text string, frontmatter map[string]any) []string {
