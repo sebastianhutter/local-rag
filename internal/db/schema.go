@@ -93,6 +93,33 @@ func InitSchema(db *sql.DB, embeddingDim int) error {
 		-- Speeds up per-collection COUNT/aggregation (collections list/info) and
 		-- collection-scoped deletes. Without it, those queries full-scan documents.
 		CREATE INDEX IF NOT EXISTS idx_documents_collection_id ON documents(collection_id);
+
+		-- Relations between indexed sources, for expanding a search result into
+		-- what it is connected to. Endpoints are sources rather than documents:
+		-- a relation belongs to the file, not to whichever chunk happened to
+		-- mention it, and sources.id survives a re-embed while a document id
+		-- does not. Unlike the vec0 tables this one takes foreign keys, so
+		-- pruning a source or deleting a collection removes its edges for free.
+		--
+		-- rel says what the relation means, origin says where it came from, so
+		-- one class of edge can be rebuilt or discarded without touching the
+		-- others -- which matters most for any future LLM-derived edges, whose
+		-- cost and error rate are nothing like a parsed wikilink's.
+		CREATE TABLE IF NOT EXISTS graph_edges (
+			src_source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+			dst_source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+			rel           TEXT NOT NULL,
+			origin        TEXT NOT NULL,
+			PRIMARY KEY (src_source_id, dst_source_id, rel)
+		);
+
+		-- Traversal is undirected in practice: "what is this connected to"
+		-- wants edges pointing at a source as much as edges leaving it, and
+		-- the primary key only serves the src direction.
+		CREATE INDEX IF NOT EXISTS idx_graph_edges_dst ON graph_edges(dst_source_id);
+
+		-- Rebuilding one origin deletes just that origin's rows.
+		CREATE INDEX IF NOT EXISTS idx_graph_edges_origin ON graph_edges(origin);
 	`, embeddingDim)
 
 	if _, err := db.Exec(schema); err != nil {

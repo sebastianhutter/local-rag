@@ -94,6 +94,12 @@ Vector search is two-stage for speed: a fast Hamming-distance KNN over binary-qu
 
 **Incremental indexing**: Track file hashes, modification times, and watermarks. Only re-embed changed or new content. Use `--force` to re-index everything.
 
+**Relation graph**: `graph_edges` records parsed relations between indexed *sources* — Confluence page hierarchy, frontmatter properties, wikilinks and ticket-key mentions — so a search result can be expanded into what it is connected to rather than only what resembles it. Endpoints are sources, not documents: a relation belongs to the file, and `sources.id` survives a re-embed while a document id does not. Every edge carries a `rel` (what it means) and an `origin` (where it came from), and origins are rebuilt independently. Nothing calls a model; `local-rag graph rebuild` is a scan, not an indexing run.
+
+Measured on a real database: 28,491 edges over 18,597 connected sources — 24,077 ticket mentions, 2,417 wikilinks, 1,745 Confluence parents, 252 typed frontmatter relations. Ticket mentions are the only class that crosses corpora (a mail, a commit and a note all reach the same issue) and cost one regex. Replaying 60 queries taken from real usage, two thirds gained at least one document that vector + FTS could not reach at six times the normal `top_k`.
+
+Expansion cost is bounded by the *degree* of the nodes it starts from, not by the number of nodes, so a hub cap is not a refinement but a precondition: uncapped, expansion returned 24 documents per query instead of 3. The highest-degree sources here are a document enumerating 570 ticket keys and the vault's folder-index notes.
+
 **Pruning**: Indexing removes what indexing cannot see. Before indexing `obsidian`, `code`, `project` or `all`, a prune pass drops sources whose file no longer exists on disk, so deleted and moved files leave search results without a manual step; `--no-prune` skips it. For `obsidian` it also drops sources the vault walk would no longer visit — anything inside a folder named in `obsidian_exclude_folders`, an Obsidian internal directory, or a dot-directory. Without that, adding a folder to the exclude list stranded its documents permanently: the files still exist, so the existence check kept them, while the walk never refreshed them again. Both reasons are logged separately (`kind=file` versus `kind=excluded-folder`), so a mistyped exclude entry shows up as a surprising count rather than a silent deletion. `walkVault` and the prune predicate share `vaultSkipsDir` precisely so they cannot drift. Two deliberate narrowings: a cloud placeholder is never pruned (it exists, and skipping it is temporary), and an unsupported extension is not either — otherwise a change to the parser's extension map would become silent data loss. The standalone `local-rag prune [COLLECTION]` covers every collection type — including email, calibre and rss, which are pruned against their source databases rather than the filesystem. `prune --vectors` is a separate repair path: it deletes embeddings in `vec_documents`/`vec_documents_bin` whose `document_id` no longer resolves, which CASCADE cannot do because the vec0 virtual tables have no foreign keys.
 
 ---
@@ -198,6 +204,24 @@ CREATE VIRTUAL TABLE documents_fts USING fts5(
     content_rowid='id'
 );
 
+-- Parsed relations between sources, for expanding a result into what it is
+-- connected to. Endpoints are sources (a relation belongs to the file, and
+-- sources.id survives a re-embed). Unlike the vec0 tables this one takes
+-- foreign keys, so prune and collection-delete clean up edges for free.
+-- rel = what the relation means ('links_to', 'child_of', 'mentions', or a
+-- frontmatter property name such as 'related' or 'parent').
+-- origin = where it came from ('wikilink', 'frontmatter', 'confluence',
+-- 'ticket-regex'), so one class can be rebuilt or discarded alone.
+CREATE TABLE graph_edges (
+    src_source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    dst_source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    rel           TEXT NOT NULL,
+    origin        TEXT NOT NULL,
+    PRIMARY KEY (src_source_id, dst_source_id, rel)
+);
+CREATE INDEX idx_graph_edges_dst ON graph_edges(dst_source_id);
+CREATE INDEX idx_graph_edges_origin ON graph_edges(origin);
+
 -- Key/value store for schema bookkeeping: 'schema_version' drives db.Migrate,
 -- 'binary_backfill_done' marks vec_documents_bin as fully populated so the
 -- one-time backfill is not re-checked on every open.
@@ -238,6 +262,7 @@ local-rag/
 │       ├── cmd_search.go            # search
 │       ├── cmd_collections.go       # collections list/info/delete/export/paths
 │       ├── cmd_prune.go             # prune, prune --vectors
+│       ├── cmd_graph.go             # graph rebuild, graph stats
 │       ├── cmd_status.go            # status
 │       ├── cmd_serve.go             # serve (stdio / SSE)
 │       └── cmd_gui.go               # gui
@@ -256,6 +281,7 @@ local-rag/
 │   ├── embeddings/                  # Ollama embedding client + host resolution
 │   ├── chunker/                     # Text chunking strategies (per file type)
 │   ├── search/                      # Hybrid search engine (vector + FTS + RRF)
+│   ├── graph/                       # Relation graph: edge derivation per origin
 │   ├── parser/                      # File parsers (markdown, pdf, docx, epub, html, code, rss, email, calibre)
 │   ├── indexer/                     # Source indexers (obsidian, email, calibre, rss, git, project),
 │   │                                #   shared batching (batch.go), pruning (prune.go)
@@ -311,6 +337,11 @@ local-rag collections paths add NAME PATH...     # Add paths to a collection in 
 local-rag collections paths remove NAME PATH...  # Remove paths from a collection in config
 local-rag collections paths update NAME \        # Rewrite path prefixes in-place
   --old-prefix OLD --new-prefix NEW              # (config paths + source paths in DB)
+
+# Relation graph
+local-rag graph rebuild                  # Derive all edge origins and replace the stored set
+local-rag graph rebuild --origin wikilink,confluence   # Rebuild only these origins
+local-rag graph stats                    # Edge counts by origin and relation, plus the top hubs
 
 # Status and GUI
 local-rag status                        # Overall stats: collections, doc counts, DB size, Ollama status
