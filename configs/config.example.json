@@ -51,7 +51,8 @@
         "top_k": 10,
         "rrf_k": 60,
         "vector_weight": 0.7,
-        "fts_weight": 0.3
+        "fts_weight": 0.3,
+        "exclude_collections": []
     },
     "ocr": {
         "enabled": true,

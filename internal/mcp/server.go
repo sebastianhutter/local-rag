@@ -73,7 +73,9 @@ var ragSearchTool = mcp.NewTool("rag_search",
 		mcp.Required(),
 		mcp.Description("Search query text (natural language or keywords)")),
 	mcp.WithString("collection",
-		mcp.Description("Filter by collection name or type ('system', 'project', 'code'). Omit to search all.")),
+		mcp.Description("Filter by collection name or type ('system', 'project', 'code'). Omit to search all, "+
+			"except collections the config excludes from the default sweep — naming one of those "+
+			"explicitly still searches it.")),
 	mcp.WithNumber("top_k",
 		mcp.Description("Number of results to return (default: 10)")),
 	mcp.WithString("source_type",

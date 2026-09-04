@@ -327,6 +327,8 @@ local-rag serve --port 31123            # Start with HTTP/SSE transport
 # rag_search also accepts a "path" param: a case-insensitive substring of the
 # source path to scope results to a subfolder or repo (e.g. "backend/services")
 # rag_search's "collection" param takes a name OR a type ('system', 'project', 'code')
+# Collections in search_defaults.exclude_collections are skipped when "collection"
+# is omitted; naming one explicitly still searches it
 ```
 
 ---
@@ -379,7 +381,8 @@ Config file location: `~/.local-rag/config.json`
     "top_k": 10,
     "rrf_k": 60,
     "vector_weight": 0.7,
-    "fts_weight": 0.3
+    "fts_weight": 0.3,
+    "exclude_collections": []
   },
   "ocr": {
     "enabled": false,
@@ -406,6 +409,12 @@ Items are built lazily as batches fill, so memory is bounded to `embedding_worke
 Note that `chunk_size_tokens` counts whitespace-separated **words**, not model tokens, so dense content (code, minified data, non-English text) can produce chunks several times larger in tokens than the setting suggests. A batch whose embedding request fails is retried one item at a time, so a single unembeddable item costs only itself instead of discarding everything batched with it.
 
 `--force` clears the collection (or, for code, the repository) up front rather than purging batch by batch. Deleting from the vec0 vector tables filters on an un-indexed column and full-scans them, which at ~800k vectors costs ~6.6s per 512-item wave — comparable to the embedding it accompanies. Clearing once costs ~9s for the whole run and drops the per-wave write to ~80ms.
+
+**`search_defaults.exclude_collections`** (optional, default `[]`): collection names or types skipped when a search does not name a collection of its own. Naming one explicitly still searches it, so this demotes a collection out of the default sweep rather than hiding it — the exclusion is applied in `search.Search`, so CLI, MCP and GUI all inherit it without knowing it exists.
+
+It exists because a collection can be large enough to crowd the results without being wrong. Measured on a real database: an archive of Claude session transcripts (`Notes/_Claude Sessions/`) was 261 notes — 11% of Obsidian sources — but 311,014 documents: 91% of the Obsidian collection and 40% of the entire database, at a median 612 chunks per note against 7 for an ordinary note. Across 60 queries replayed from real usage it took **50% of all top-10 result slots**. That alone does not make those results wrong — for a question the transcript actually discussed, it may be the best source — but excluding it from the default sweep roughly doubled what graph-style neighbour expansion could reach (120 → 259 candidate documents), because a transcript chunk occupies a seed slot without connecting to anything. The archive stays searchable with `--collection claude-sessions`; it just stops competing for every query. Editable under **Settings → Search**.
+
+Note that exclusion counts as a filter, so it widens the vector candidate pool and the FTS candidate limit exactly as the other filters do — a collection can be excluded without the result count collapsing.
 
 **`skip_cloud_placeholders`** (optional, default `true`): skip files that exist only in the cloud. macOS marks on-demand files from OneDrive, iCloud Drive, Google Drive and Synology Drive with the `SF_DATALESS` flag — the name, size and mtime are local but the data is not. Opening one makes macOS download it from the provider first, so indexing a mostly-online folder is bounded by network speed and materialises the files on disk (a OneDrive shared library can be hundreds of GB). Placeholders are stat-ed but never opened, so a skipped file costs nothing; a per-path warning reports how many were skipped. Set to `false` to download and index them anyway, or mark the folders *Always Keep on This Device* in Finder. Editable under **Settings → General** (*Cloud Storage* card). Pruning is unaffected — a placeholder still exists on disk, so previously indexed content is not removed.
 

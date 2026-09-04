@@ -23,6 +23,18 @@ type SearchDefaults struct {
 	RRFK         int     `json:"rrf_k"`
 	VectorWeight float64 `json:"vector_weight"`
 	FTSWeight    float64 `json:"fts_weight"`
+
+	// ExcludeCollections lists collections to skip when a search does not name
+	// a collection of its own. Naming one explicitly still searches it, so this
+	// demotes a collection out of the default sweep rather than hiding it.
+	//
+	// It exists because a collection can be large enough to crowd the results
+	// without being wrong: an archive of chat transcripts or generated logs can
+	// hold most of the documents in the database and take most of the result
+	// slots, while the material worth retrieving sits elsewhere. Entries are
+	// collection names or types ('system', 'project', 'code'), matching what
+	// the collection filter itself accepts.
+	ExcludeCollections []string `json:"exclude_collections"`
 }
 
 // OCRConfig holds settings for optional tesseract-based OCR fallback on scanned PDFs.
@@ -320,10 +332,11 @@ func defaults() *Config {
 		GitHistoryInMonths:        6,
 		GitCommitSubjectBlacklist: []string{},
 		SearchDefaults: SearchDefaults{
-			TopK:         10,
-			RRFK:         60,
-			VectorWeight: 0.7,
-			FTSWeight:    0.3,
+			TopK:               10,
+			RRFK:               60,
+			VectorWeight:       0.7,
+			FTSWeight:          0.3,
+			ExcludeCollections: []string{},
 		},
 		OCR: OCRConfig{
 			Enabled:       false,
