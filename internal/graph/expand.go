@@ -12,10 +12,11 @@ import (
 // number of nodes, and a corpus of this shape always has a few sources that
 // enumerate hundreds of others.
 const (
-	DefaultHops   = 1
-	DefaultHubCap = 25
-	DefaultLimit  = 20
-	MaxHops       = 2
+	DefaultHops         = 1
+	DefaultHubCap       = 25
+	DefaultLimit        = 20
+	DefaultPerSeedLimit = 5
+	MaxHops             = 2
 )
 
 // Neighbour is one source reached from a seed.
@@ -52,6 +53,19 @@ type ExpandOptions struct {
 	// Limit caps the returned neighbours after ranking.
 	Limit int
 
+	// PerSeedLimit caps how many neighbours a single seed may contribute,
+	// 0 meaning DefaultPerSeedLimit. Without it one prolific node monopolises
+	// the result: a wiki page with thirty children contributes thirty
+	// siblings-by-proxy and buries what every other seed found.
+	PerSeedLimit int
+
+	// IncludeHubs returns neighbours whose own degree exceeds HubCap. Off by
+	// default: a source with hundreds of edges is a table of contents, not an
+	// answer to "what is this connected to". Ranking already puts them last,
+	// but that is not enough when a seed has few neighbours and the hub makes
+	// the cut anyway.
+	IncludeHubs bool
+
 	// KeepDuplicateTitles disables the collapsing of neighbours that share a
 	// title. Off by default because near-identical sources are common and
 	// ruinous here: automated notification mail about one ticket produces
@@ -73,6 +87,9 @@ func (o ExpandOptions) withDefaults() ExpandOptions {
 	}
 	if o.Limit <= 0 {
 		o.Limit = DefaultLimit
+	}
+	if o.PerSeedLimit <= 0 {
+		o.PerSeedLimit = DefaultPerSeedLimit
 	}
 	return o
 }
@@ -121,11 +138,30 @@ func Expand(conn *sql.DB, seeds []int64, opts ExpandOptions) ([]Neighbour, error
 			return nil, err
 		}
 
+		// Order candidates by the specificity of the destination before the
+		// per-seed cap is applied, so a seed spends its allowance on its
+		// rarest neighbours rather than its lowest row ids.
+		sort.SliceStable(edges, func(i, j int) bool {
+			di, dj := degrees[edges[i].dst], degrees[edges[j].dst]
+			if di != dj {
+				return di < dj
+			}
+			return edges[i].dst < edges[j].dst
+		})
+
 		var next []int64
+		perSeed := make(map[int64]int, len(expandable))
 		for _, e := range edges {
 			if seen[e.dst] {
 				continue
 			}
+			if !opts.IncludeHubs && degrees[e.dst] > opts.HubCap {
+				continue
+			}
+			if perSeed[e.src] >= opts.PerSeedLimit {
+				continue
+			}
+			perSeed[e.src]++
 			seen[e.dst] = true
 			found = append(found, Neighbour{
 				SourceID: e.dst,

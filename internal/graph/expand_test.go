@@ -188,7 +188,7 @@ func TestExpandClampsHops(t *testing.T) {
 	for i := 0; i < len(chain)-1; i++ {
 		addEdge(t, db, chain[i], chain[i+1], RelLinksTo, OriginWikilink)
 	}
-	got, err := Expand(db, []int64{chain[0]}, ExpandOptions{Hops: 99, Limit: 100})
+	got, err := Expand(db, []int64{chain[0]}, ExpandOptions{Hops: 99, Limit: 100, HubCap: 50})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,17 +209,29 @@ func TestExpandHubCap(t *testing.T) {
 		addEdge(t, db, hub, other, RelMentions, OriginTicket)
 	}
 
-	// The hub itself is still returned: it is a legitimate destination.
+	// By default a hub is neither traversed through nor returned: a source
+	// with a large degree is a table of contents, not an answer.
 	got, err := Expand(db, []int64{seed}, ExpandOptions{Hops: 2, HubCap: 5, Limit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].SourceID != hub {
-		t.Fatalf("got %v, want just the hub %d -- expansion must not pass through it", ids(got), hub)
+	if len(got) != 0 {
+		t.Fatalf("got %v, want nothing -- the only neighbour is a hub", ids(got))
 	}
 
-	// Raise the cap above the hub's degree and its neighbours appear.
-	got, err = Expand(db, []int64{seed}, ExpandOptions{Hops: 2, HubCap: 50, Limit: 100})
+	// IncludeHubs returns it without traversing through it.
+	got, err = Expand(db, []int64{seed}, ExpandOptions{Hops: 2, HubCap: 5, Limit: 100, IncludeHubs: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].SourceID != hub {
+		t.Fatalf("got %v, want just the hub %d", ids(got), hub)
+	}
+
+	// Raise the cap above the hub's degree and its neighbours appear. The
+	// per-seed cap still applies, so the hub contributes at most that many.
+	got, err = Expand(db, []int64{seed},
+		ExpandOptions{Hops: 2, HubCap: 50, Limit: 100, PerSeedLimit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,5 +341,38 @@ func TestSnippet(t *testing.T) {
 	// Multi-byte content must not be cut mid-rune.
 	if got := snippet(strings.Repeat("äöü ", 100)); !strings.HasSuffix(got, "...") {
 		t.Errorf("unexpected multi-byte snippet: %q", got)
+	}
+}
+
+// One prolific seed must not monopolise the result: a wiki page with thirty
+// children would otherwise bury what every other seed found.
+func TestExpandPerSeedLimit(t *testing.T) {
+	db, coll := setupExpandDB(t)
+	prolific := addNode(t, db, coll, "Prolific", "p")
+	modest := addNode(t, db, coll, "Modest", "m")
+	only := addNode(t, db, coll, "Only", "o")
+	addEdge(t, db, modest, only, RelLinksTo, OriginWikilink)
+	for i := 0; i < 10; i++ {
+		child := addNode(t, db, coll, fmt.Sprintf("Child%d", i), "c")
+		addEdge(t, db, prolific, child, RelChildOf, OriginConfluence)
+	}
+
+	got, err := Expand(db, []int64{prolific, modest},
+		ExpandOptions{HubCap: 50, PerSeedLimit: 3, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 3 from the prolific seed plus the modest seed's single neighbour.
+	if len(got) != 4 {
+		t.Errorf("got %d neighbours (%v), want 4", len(got), ids(got))
+	}
+	var sawOnly bool
+	for _, n := range got {
+		if n.SourceID == only {
+			sawOnly = true
+		}
+	}
+	if !sawOnly {
+		t.Error("the modest seed's neighbour was crowded out by the prolific one")
 	}
 }
