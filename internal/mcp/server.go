@@ -38,6 +38,7 @@ func CreateServer() *server.MCPServer {
 		server.ServerTool{Tool: ragIndexTool, Handler: handleRagIndex},
 		server.ServerTool{Tool: ragCollectionInfoTool, Handler: handleRagCollectionInfo},
 		server.ServerTool{Tool: ragPruneTool, Handler: handleRagPrune},
+		server.ServerTool{Tool: ragNeighborsTool, Handler: handleRagNeighbors},
 	)
 
 	return s
@@ -96,6 +97,38 @@ var ragSearchTool = mcp.NewTool("rag_search",
 		mcp.Description("Filter by arbitrary metadata fields. JSON object of key-value string pairs. "+
 			"Matches are case-insensitive substring for strings, element-wise for arrays. "+
 			"Example: {\"source\": \"jira\", \"issue_key\": \"CB-123\"}")),
+)
+
+// rag_neighbors answers a question hybrid search structurally cannot: not
+// "what resembles this query" but "what is this document connected to".
+var ragNeighborsTool = mcp.NewTool("rag_neighbors",
+	mcp.WithDescription(
+		"Walk the relation graph out from an indexed source and return what it is connected to: "+
+			"linked notes, a wiki page's parent and children, the tickets a document mentions, and "+
+			"whatever mentions it. Use it after rag_search to follow a result outwards -- it finds "+
+			"documents that are related but share no wording with the query, which vector and "+
+			"full-text search cannot reach. Returns titles, paths and one-line snippets rather than "+
+			"full content, so it costs a fraction of another search. Requires 'local-rag graph "+
+			"rebuild' to have been run."),
+	mcp.WithNumber("source_id",
+		mcp.Required(),
+		mcp.Description("The source_id of an indexed file, as returned in rag_search results")),
+	mcp.WithString("rel",
+		mcp.Description("Only follow these relations, comma-separated. Common ones: 'links_to' "+
+			"(a wikilink), 'child_of' (wiki page hierarchy), 'mentions' (a ticket key), plus "+
+			"frontmatter property names such as 'related' or 'parent'. Omit to follow all.")),
+	mcp.WithString("origin",
+		mcp.Description("Only follow edges derived this way, comma-separated: 'confluence', "+
+			"'frontmatter', 'wikilink', 'ticket-regex'. Omit to follow all.")),
+	mcp.WithNumber("hops",
+		mcp.Description("Traversal depth, 1 or 2 (default 1). Two hops over a densely "+
+			"cross-referenced corpus returns a lot; prefer 1 and follow up on what looks useful.")),
+	mcp.WithNumber("hub_cap",
+		mcp.Description("Do not expand through a source with more edges than this (default 25). "+
+			"A hub is a fine destination and a poor route: a ticket 400 documents mention says "+
+			"nothing about which of them belong together. Raise it to expand through one anyway.")),
+	mcp.WithNumber("limit",
+		mcp.Description("Maximum neighbours to return (default 20)")),
 )
 
 var ragListCollectionsTool = mcp.NewTool("rag_list_collections",

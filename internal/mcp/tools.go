@@ -15,6 +15,7 @@ import (
 	"github.com/sebastianhutter/local-rag-go/internal/config"
 	"github.com/sebastianhutter/local-rag-go/internal/db"
 	"github.com/sebastianhutter/local-rag-go/internal/embeddings"
+	"github.com/sebastianhutter/local-rag-go/internal/graph"
 	"github.com/sebastianhutter/local-rag-go/internal/indexer"
 	"github.com/sebastianhutter/local-rag-go/internal/search"
 )
@@ -86,6 +87,9 @@ func handleRagSearch(ctx context.Context, request mcp.CallToolRequest) (*mcp.Cal
 			"content":     r.Content,
 			"collection":  r.Collection,
 			"source_type": r.SourceType,
+			// source_id is what rag_neighbors takes, so a caller can go from a
+			// result to what it is connected to without addressing it by path.
+			"source_id":   r.SourceID,
 			"source_path": r.SourcePath,
 			"source_uri":  buildSourceURI(r.SourcePath, r.SourceType, r.Collection, r.Metadata, cfg),
 			"score":       fmt.Sprintf("%.4f", r.Score),
@@ -405,4 +409,85 @@ func buildObsidianURI(sourcePath, vaultPath string) string {
 	return fmt.Sprintf("obsidian://open?vault=%s&file=%s",
 		url.QueryEscape(vaultName),
 		url.QueryEscape(relPath))
+}
+
+// handleRagNeighbors expands one source into what it is connected to.
+func handleRagNeighbors(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	sourceID := int64(request.GetFloat("source_id", 0))
+	if sourceID <= 0 {
+		return mcp.NewToolResultError("source_id is required (take it from a rag_search result)"), nil
+	}
+
+	_, conn, err := openDB()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	defer conn.Close()
+
+	var path string
+	if err := conn.QueryRow("SELECT source_path FROM sources WHERE id = ?", sourceID).Scan(&path); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("no indexed source with source_id %d", sourceID)), nil
+	}
+
+	neighbours, err := graph.Expand(conn, []int64{sourceID}, graph.ExpandOptions{
+		Rels:    splitList(request.GetString("rel", "")),
+		Origins: splitList(request.GetString("origin", "")),
+		Hops:    int(request.GetFloat("hops", 0)),
+		HubCap:  int(request.GetFloat("hub_cap", 0)),
+		Limit:   int(request.GetFloat("limit", 0)),
+	})
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("expand failed: %v", err)), nil
+	}
+
+	if len(neighbours) == 0 {
+		// Distinguishing the two cases matters: one means "nothing to find
+		// here", the other means "raise the cap or the graph is not built".
+		var edges int
+		_ = conn.QueryRow("SELECT COUNT(*) FROM graph_edges").Scan(&edges)
+		if edges == 0 {
+			return mcp.NewToolResultText(
+				"No relation graph has been built yet. Run 'local-rag graph rebuild'."), nil
+		}
+		return mcp.NewToolResultText(fmt.Sprintf(
+			"No neighbours for source %d (%s). Either it has no edges, or it is a hub and "+
+				"expansion stopped there -- raise hub_cap to expand through it.", sourceID, path)), nil
+	}
+
+	out := make([]map[string]any, 0, len(neighbours))
+	for _, n := range neighbours {
+		out = append(out, map[string]any{
+			"source_id":   n.SourceID,
+			"title":       n.Title,
+			"collection":  n.Collection,
+			"source_path": n.SourcePath,
+			"snippet":     n.Snippet,
+			"relation":    n.Rel,
+			"origin":      n.Origin,
+			"hops":        n.Hops,
+			"degree":      n.Degree,
+			"reached_via": n.ViaID,
+		})
+	}
+
+	data, _ := json.MarshalIndent(map[string]any{
+		"source_id":   sourceID,
+		"source_path": path,
+		"neighbours":  out,
+	}, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// splitList parses a comma-separated tool argument, tolerating spaces.
+func splitList(v string) []string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(v, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
