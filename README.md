@@ -1,6 +1,6 @@
 # local-rag
 
-A fully local, privacy-preserving RAG (Retrieval Augmented Generation) system for macOS. Indexes personal knowledge from multiple sources into a single SQLite database with hybrid vector + full-text search. Runs as a menu bar app with built-in MCP server so Claude Desktop and Claude Code can query your personal knowledge base directly.
+A fully local, privacy-preserving RAG (Retrieval Augmented Generation) system for macOS. Indexes personal knowledge from multiple sources into a single SQLite database with hybrid vector + full-text search, plus a **relation graph** so a result can be expanded into what it is connected to — not only into what resembles it. Runs as a menu bar app with built-in MCP server so Claude Desktop and Claude Code can query your personal knowledge base directly.
 
 ## Supported Sources
 
@@ -106,7 +106,7 @@ Launch `local-rag` with no arguments (or `local-rag gui`) to start the menu bar 
 
 local-rag exposes 5 MCP tools: `rag_search`, `rag_list_collections`, `rag_collection_info`, `rag_index`, and `rag_prune`.
 
-The `rag_search` tool supports a `metadata_filter` parameter — a JSON object of key-value pairs for filtering by arbitrary metadata fields (e.g. `{"source": "jira", "issue_key": "CB-123"}`) — and a `path` parameter to scope results to a subfolder or repo by a case-insensitive substring of the source path (e.g. `"infrastructure/modules"`). Its `collection` parameter accepts either a collection name or a collection *type* (`system`, `project`, `code`), so a search can be scoped to all code repos at once.
+The `rag_search` tool supports a `metadata_filter` parameter — a JSON object of key-value pairs for filtering by arbitrary metadata fields (e.g. `{"source": "jira", "issue_key": "PROJ-123"}`) — and a `path` parameter to scope results to a subfolder or repo by a case-insensitive substring of the source path (e.g. `"infrastructure/modules"`). Its `collection` parameter accepts either a collection name or a collection *type* (`system`, `project`, `code`), so a search can be scoped to all code repos at once.
 
 ### GUI Mode (SSE)
 
@@ -167,7 +167,7 @@ local-rag index project [NAME]                   Index project(s) from config; o
 local-rag index all                              Index all configured sources
 ```
 
-All index commands accept `--force` to re-index everything regardless of change detection, and `--no-prune` to skip the automatic pruning pass.
+All index commands accept `--force` to re-index everything regardless of change detection, `--no-prune` to skip the automatic pruning pass, and `--no-graph` to skip the relation-graph rebuild that otherwise runs afterwards.
 
 Indexing `obsidian`, `code`, `project` and `all` prunes stale sources first — entries whose file no longer exists on disk are removed before the run, so deleted and moved files do not linger in search results.
 
@@ -220,10 +220,35 @@ local-rag collections paths update "Project Alpha" \
   --old-prefix ~/docs/specs --new-prefix ~/new-location/specs
 ```
 
+### Relation Graph
+
+```
+local-rag graph rebuild                  Derive relations from indexed content
+local-rag graph rebuild --origin NAME    Rebuild one origin, leaving the others alone
+local-rag graph stats                    Edge counts by origin and relation, plus top hubs
+local-rag neighbors SOURCE               What a source is connected to (id or path substring)
+```
+
+`neighbors` accepts `--rel`, `--origin`, `--hops` (1 or 2), `--hub-cap` and `--top`.
+
+The graph records relations parsed from the content — Obsidian wikilinks and frontmatter
+properties, Confluence page hierarchy, and mentions of a ticket key across mail, notes and
+commits. It exists to close a gap search cannot: a note that never uses your query's wording
+but links to one that does is unreachable at any `top_k`, and one hop away here. Replaying 60
+real queries, 78% gained at least one document that was unreachable at `top_k` 60.
+
+Nothing calls a model — a rebuild is a scan of data already in the database, about 20 seconds
+for ~19,000 edges — and it runs automatically after each index. Agents use it through the
+`rag_neighbors` MCP tool.
+
+See [docs/relation-graph.md](docs/relation-graph.md) for the design, the measurements, and why
+hub suppression is a precondition rather than a refinement.
+
 ### Other
 
 ```
 local-rag status            Database stats, collection counts, Ollama status
+local-rag graph rebuild     Rebuild the relation graph (see above)
 local-rag prune [NAME]      Remove stale sources (see Pruning above)
 local-rag serve [--port N]  Start MCP server (stdio, or SSE on given port)
 local-rag gui               Start menu bar app (default when no subcommand)
@@ -332,7 +357,7 @@ internal/
   gui/               Fyne menu bar app, settings, log viewer
 configs/
   config.example.json  Annotated configuration template
-docs/                Architecture, hybrid search/RRF, Ollama, eM Client schema
+docs/                Architecture, hybrid search/RRF, relation graph, Ollama, eM Client schema
 scripts/
   build-app.sh       Create macOS .app bundle
   build-dmg.sh       Create DMG installer
@@ -340,7 +365,7 @@ scripts/
   release.yml        Tagged release build
 ```
 
-Deeper notes live in [`docs/`](docs/): [architecture](docs/architecture.md), [hybrid search and RRF](docs/hybrid-search-and-rrf.md), [Ollama and embeddings](docs/ollama-and-embeddings.md), [eM Client schema](docs/emclient-schema.md).
+Deeper notes live in [`docs/`](docs/): [architecture](docs/architecture.md), [hybrid search and RRF](docs/hybrid-search-and-rrf.md), [the relation graph](docs/relation-graph.md), [Ollama and embeddings](docs/ollama-and-embeddings.md), [eM Client schema](docs/emclient-schema.md).
 
 ## License
 

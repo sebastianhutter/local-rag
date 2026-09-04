@@ -226,10 +226,10 @@ func TestRebuildWikilinkResolution(t *testing.T) {
 
 func TestRebuildTicketMentionsCrossCorpora(t *testing.T) {
 	db := setupDB(t)
-	issue := addSource(t, db, "/sync/jira/CB-42.md",
-		map[string]any{"issue_key": "CB-42"}, "CB-42: do the thing")
-	note := addSource(t, db, "/vault/Note.md", nil, "Discussed CB-42 with the team")
-	mail := addSource(t, db, "/mail/thread.md", nil, "re: CB-42 and CB-999 (not indexed)")
+	issue := addSource(t, db, "/sync/jira/PROJ-42.md",
+		map[string]any{"issue_key": "PROJ-42"}, "PROJ-42: do the thing")
+	note := addSource(t, db, "/vault/Note.md", nil, "Discussed PROJ-42 with the team")
+	mail := addSource(t, db, "/mail/thread.md", nil, "re: PROJ-42 and PROJ-999 (not indexed)")
 
 	stats, err := Rebuild(db, RebuildOptions{Origins: []string{OriginTicket}})
 	if err != nil {
@@ -251,7 +251,7 @@ func TestRebuildTicketMentionsCrossCorpora(t *testing.T) {
 		}
 	}
 	if st := stats.ByOrigin[OriginTicket]; st.Unresolved != 1 {
-		t.Errorf("Unresolved = %d, want 1 (CB-999)", st.Unresolved)
+		t.Errorf("Unresolved = %d, want 1 (PROJ-999)", st.Unresolved)
 	}
 }
 
@@ -430,11 +430,11 @@ func TestHelpers(t *testing.T) {
 // different sender still does.
 func TestRebuildTicketExcludesSenders(t *testing.T) {
 	db := setupDB(t)
-	issue := addSource(t, db, "/sync/jira/CB-7.md", map[string]any{"issue_key": "CB-7"}, "CB-7 body")
+	issue := addSource(t, db, "/sync/jira/PROJ-7.md", map[string]any{"issue_key": "PROJ-7"}, "PROJ-7 body")
 	human := addSource(t, db, "/mail/human.md",
-		map[string]any{"sender": "Colleague <colleague@example.com>"}, "what about CB-7?")
+		map[string]any{"sender": "Colleague <colleague@example.com>"}, "what about PROJ-7?")
 	addSource(t, db, "/mail/notification.md",
-		map[string]any{"sender": "Someone (Jira) <jira@example.atlassian.net>"}, "[JIRA] (CB-7) updated")
+		map[string]any{"sender": "Someone (Jira) <jira@example.atlassian.net>"}, "[JIRA] (PROJ-7) updated")
 
 	stats, err := Rebuild(db, RebuildOptions{
 		Origins:               []string{OriginTicket},
@@ -457,9 +457,9 @@ func TestRebuildTicketExcludesSenders(t *testing.T) {
 // display name is enough and casing does not matter.
 func TestRebuildTicketSenderMatchIsCaseInsensitiveSubstring(t *testing.T) {
 	db := setupDB(t)
-	addSource(t, db, "/sync/jira/CB-8.md", map[string]any{"issue_key": "CB-8"}, "CB-8 body")
+	addSource(t, db, "/sync/jira/PROJ-8.md", map[string]any{"issue_key": "PROJ-8"}, "PROJ-8 body")
 	addSource(t, db, "/mail/a.md",
-		map[string]any{"sender": "Bot <NOREPLY@Example.COM>"}, "CB-8 changed")
+		map[string]any{"sender": "Bot <NOREPLY@Example.COM>"}, "PROJ-8 changed")
 
 	stats, err := Rebuild(db, RebuildOptions{
 		Origins:               []string{OriginTicket},
@@ -479,9 +479,9 @@ func TestRebuildTicketSenderMatchIsCaseInsensitiveSubstring(t *testing.T) {
 // An empty or whitespace-only entry must not exclude everything.
 func TestRebuildTicketIgnoresBlankSenderPatterns(t *testing.T) {
 	db := setupDB(t)
-	issue := addSource(t, db, "/sync/jira/CB-9.md", map[string]any{"issue_key": "CB-9"}, "CB-9 body")
+	issue := addSource(t, db, "/sync/jira/PROJ-9.md", map[string]any{"issue_key": "PROJ-9"}, "PROJ-9 body")
 	mail := addSource(t, db, "/mail/a.md",
-		map[string]any{"sender": "Person <person@example.com>"}, "see CB-9")
+		map[string]any{"sender": "Person <person@example.com>"}, "see PROJ-9")
 
 	if _, err := Rebuild(db, RebuildOptions{
 		Origins:               []string{OriginTicket},
@@ -508,6 +508,92 @@ func TestRebuildSenderExclusionDoesNotAffectOtherOrigins(t *testing.T) {
 	if _, err := Rebuild(db, RebuildOptions{
 		MentionExcludeSenders: []string{"jira@"},
 	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []storedEdge{{Src: note, Dst: target, Rel: RelLinksTo, Origin: OriginWikilink}}
+	if got := edges(t, db); !reflect.DeepEqual(got, want) {
+		t.Errorf("edges = %+v, want %+v", got, want)
+	}
+}
+
+// A path in a link disambiguates: two notes share a name, and the link says
+// which folder it means.
+func TestResolveTargetPrefersPath(t *testing.T) {
+	db := setupDB(t)
+	inProcesses := addSource(t, db, "/vault/Processes/Handover.md", nil, "")
+	addSource(t, db, "/vault/Archive/Old/Handover.md", nil, "")
+	note := addSource(t, db, "/vault/Note.md",
+		map[string]any{"links": []any{"Processes/Handover"}}, "")
+
+	stats, err := Rebuild(db, RebuildOptions{Origins: []string{OriginWikilink}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []storedEdge{{Src: note, Dst: inProcesses, Rel: RelLinksTo, Origin: OriginWikilink}}
+	if got := edges(t, db); !reflect.DeepEqual(got, want) {
+		t.Errorf("edges = %+v, want %+v", got, want)
+	}
+	if st := stats.ByOrigin[OriginWikilink]; st.Ambiguous != 0 {
+		t.Errorf("Ambiguous = %d, want 0 -- the path was explicit", st.Ambiguous)
+	}
+}
+
+// Without a path, Obsidian's rule applies: the shallowest note wins, and the
+// choice is stable across rebuilds.
+func TestResolveTargetShortestPathWins(t *testing.T) {
+	db := setupDB(t)
+	addSource(t, db, "/vault/Deep/Deeper/Target.md", nil, "")
+	shallow := addSource(t, db, "/vault/Target.md", nil, "")
+	note := addSource(t, db, "/vault/Note.md", map[string]any{"links": []any{"Target"}}, "")
+
+	stats, err := Rebuild(db, RebuildOptions{Origins: []string{OriginWikilink}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []storedEdge{{Src: note, Dst: shallow, Rel: RelLinksTo, Origin: OriginWikilink}}
+	if got := edges(t, db); !reflect.DeepEqual(got, want) {
+		t.Errorf("edges = %+v, want %+v", got, want)
+	}
+	if st := stats.ByOrigin[OriginWikilink]; st.Ambiguous != 1 {
+		t.Errorf("Ambiguous = %d, want 1 -- the choice was still a guess", st.Ambiguous)
+	}
+}
+
+// An attachment or an intra-note heading is not a missing note, and counting it
+// as unresolved hides the references that really are missing.
+func TestResolveTargetNonNotesAreNotUnresolved(t *testing.T) {
+	db := setupDB(t)
+	addSource(t, db, "/vault/Note.md", map[string]any{"links": []any{
+		"CleanShot 2026-01-01.png",
+		"Some Spec.pdf",
+		"drawing.excalidraw",
+		"#A Heading In This Note",
+		"^blockref",
+		"Genuinely Missing Note",
+	}}, "")
+
+	stats, err := Rebuild(db, RebuildOptions{Origins: []string{OriginWikilink}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := stats.ByOrigin[OriginWikilink]
+	if st.Unresolved != 1 {
+		t.Errorf("Unresolved = %d, want 1 (only the missing note)", st.Unresolved)
+	}
+	if st.Skipped != 5 {
+		t.Errorf("Skipped = %d, want 5 (3 attachments, a heading, a block ref)", st.Skipped)
+	}
+}
+
+// A heading on a link to another note is stripped, not treated as part of the
+// name.
+func TestResolveTargetStripsTrailingAnchor(t *testing.T) {
+	db := setupDB(t)
+	target := addSource(t, db, "/vault/Target.md", nil, "")
+	note := addSource(t, db, "/vault/Note.md",
+		map[string]any{"links": []any{"Target#Some Heading"}}, "")
+
+	if _, err := Rebuild(db, RebuildOptions{Origins: []string{OriginWikilink}}); err != nil {
 		t.Fatal(err)
 	}
 	want := []storedEdge{{Src: note, Dst: target, Rel: RelLinksTo, Origin: OriginWikilink}}
