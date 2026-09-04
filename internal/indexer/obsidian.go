@@ -65,8 +65,7 @@ func walkVault(vaultPath string, excludeFolders map[string]bool, skipPlaceholder
 			return nil
 		}
 		if info.IsDir() {
-			name := info.Name()
-			if obsidianSkipDirs[name] || excludeFolders[name] || strings.HasPrefix(name, ".") {
+			if vaultSkipsDir(info.Name(), excludeFolders) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -91,6 +90,48 @@ func walkVault(vaultPath string, excludeFolders map[string]bool, skipPlaceholder
 			"count", placeholders, "vault", vaultPath)
 	}
 	return results
+}
+
+// vaultSkipsDir reports whether the vault walk descends into a directory with
+// this name. Kept separate from walkVault so pruning can ask the same question
+// the walk asks — if the two drift, a folder added to the exclude list gets
+// skipped by indexing but survives in the database forever, invisible to both.
+func vaultSkipsDir(name string, excludeFolders map[string]bool) bool {
+	return obsidianSkipDirs[name] || excludeFolders[name] || strings.HasPrefix(name, ".")
+}
+
+// vaultExcludesPath reports whether an already-indexed file now sits somewhere
+// the vault walk will not go: inside an excluded folder, an Obsidian internal
+// directory or a dot-directory, or hidden behind a leading dot itself.
+//
+// Only the components below a vault root are examined. A path under none of the
+// configured vaults cannot be judged — the vault may simply have been removed
+// from the config — and is reported as not excluded, which is also what makes
+// this safe when no vaults are configured at all. Restricting to the part below
+// the root matters: a home directory that happens to contain a folder called
+// "_Templates" must not condemn every vault beneath it.
+//
+// Deliberately narrower than the walk in two places. A cloud placeholder is not
+// excluded, because it still exists and skipping it is temporary. An
+// unsupported extension is not excluded either, since that would turn a change
+// to the parser's extension map into silent data loss.
+func vaultExcludesPath(path string, vaults []string, excludeFolders map[string]bool) bool {
+	for _, vault := range vaults {
+		rel, err := filepath.Rel(expandPath(vault), path)
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+			continue
+		}
+		parts := strings.Split(rel, string(filepath.Separator))
+		for _, dir := range parts[:len(parts)-1] {
+			if vaultSkipsDir(dir, excludeFolders) {
+				return true
+			}
+		}
+		if strings.HasPrefix(parts[len(parts)-1], ".") {
+			return true
+		}
+	}
+	return false
 }
 
 func expandPath(p string) string {
