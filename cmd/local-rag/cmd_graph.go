@@ -35,25 +35,28 @@ in place.
 Origins: ` + strings.Join(graph.AllOrigins, ", "),
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, conn, err := openConfigAndDB()
+		cfg, conn, err := openConfigAndDB()
 		if err != nil {
 			return err
 		}
 		defer conn.Close()
 
-		stats, err := graph.Rebuild(conn, graphOrigins)
+		stats, err := graph.Rebuild(conn, graph.RebuildOptions{
+			Origins:               graphOrigins,
+			MentionExcludeSenders: cfg.Graph.MentionExcludeSenders,
+		})
 		if err != nil {
 			return err
 		}
 
 		fmt.Printf("Rebuilt %d edges in %s\n\n", stats.Total(), stats.Elapsed.Round(time.Millisecond))
-		fmt.Printf("%-16s %8s %12s %10s\n", "ORIGIN", "EDGES", "UNRESOLVED", "AMBIGUOUS")
+		fmt.Printf("%-16s %8s %12s %10s %8s\n", "ORIGIN", "EDGES", "UNRESOLVED", "AMBIGUOUS", "SKIPPED")
 		for _, origin := range graph.AllOrigins {
 			st, ok := stats.ByOrigin[origin]
 			if !ok {
 				continue
 			}
-			fmt.Printf("%-16s %8d %12d %10d\n", origin, st.Edges, st.Unresolved, st.Ambiguous)
+			fmt.Printf("%-16s %8d %12d %10d %8d\n", origin, st.Edges, st.Unresolved, st.Ambiguous, st.Skipped)
 		}
 		return nil
 	},

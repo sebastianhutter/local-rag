@@ -47,6 +47,20 @@ type OriginStats struct {
 	Edges      int // distinct edges stored
 	Unresolved int // references whose target is not an indexed source
 	Ambiguous  int // references matching more than one source by name
+	Skipped    int // references deliberately ignored, e.g. an excluded sender
+}
+
+// RebuildOptions controls a rebuild. The graph package takes plain values
+// rather than the config struct so that what it needs stays visible here.
+type RebuildOptions struct {
+	// Origins limits the rebuild. Empty means AllOrigins.
+	Origins []string
+
+	// MentionExcludeSenders suppresses ticket mentions from mail whose sender
+	// contains one of these, matched case-insensitively. Tracker notification
+	// mail names a ticket without referring to it, and left in it wins the
+	// traversal's rarest-first ranking outright.
+	MentionExcludeSenders []string
 }
 
 // Stats reports the outcome of a rebuild.
@@ -72,8 +86,9 @@ type edge struct {
 // Rebuild derives the requested edge origins and replaces the stored edges for
 // each. Origins are replaced one at a time rather than the whole table being
 // cleared, so rebuilding one class leaves the others in place.
-func Rebuild(conn *sql.DB, origins []string) (*Stats, error) {
+func Rebuild(conn *sql.DB, opts RebuildOptions) (*Stats, error) {
 	start := time.Now()
+	origins := opts.Origins
 	if len(origins) == 0 {
 		origins = AllOrigins
 	}
@@ -98,7 +113,7 @@ func Rebuild(conn *sql.DB, origins []string) (*Stats, error) {
 		case OriginWikilink:
 			edges, st = idx.wikilinkEdges()
 		case OriginTicket:
-			edges, st, err = idx.ticketEdges(conn)
+			edges, st, err = idx.ticketEdges(conn, opts.MentionExcludeSenders)
 			if err != nil {
 				return nil, fmt.Errorf("derive %s edges: %w", origin, err)
 			}
@@ -113,7 +128,7 @@ func Rebuild(conn *sql.DB, origins []string) (*Stats, error) {
 		st.Edges = stored
 		stats.ByOrigin[origin] = &st
 		slog.Info("graph: origin rebuilt", "origin", origin,
-			"edges", stored, "unresolved", st.Unresolved, "ambiguous", st.Ambiguous)
+			"edges", stored, "unresolved", st.Unresolved, "ambiguous", st.Ambiguous, "skipped", st.Skipped)
 	}
 
 	stats.Elapsed = time.Since(start)
@@ -335,11 +350,16 @@ func (idx *index) wikilinkEdges() ([]edge, OriginStats) {
 // is the only relation that crosses corpora -- a mail, a commit and a note all
 // reach the same issue -- and it needs no more than a regex over content the
 // database already holds.
-func (idx *index) ticketEdges(conn *sql.DB) ([]edge, OriginStats, error) {
+func (idx *index) ticketEdges(conn *sql.DB, excludeSenders []string) ([]edge, OriginStats, error) {
 	var st OriginStats
 	out := newEdgeSet()
 	if len(idx.byKey) == 0 {
 		return nil, st, nil
+	}
+
+	excluded, err := sourcesFromSenders(conn, excludeSenders)
+	if err != nil {
+		return nil, st, err
 	}
 
 	// Prefixes come from the issues that are actually indexed, so no project
@@ -384,6 +404,10 @@ func (idx *index) ticketEdges(conn *sql.DB) ([]edge, OriginStats, error) {
 		if err := rows.Scan(&srcID, &content); err != nil {
 			return nil, st, fmt.Errorf("scan document: %w", err)
 		}
+		if excluded[srcID] {
+			st.Skipped++
+			continue
+		}
 		for _, m := range pattern.FindAllStringSubmatch(content, -1) {
 			dst, ok := idx.byKey[m[1]+"-"+m[2]]
 			if !ok {
@@ -397,6 +421,55 @@ func (idx *index) ticketEdges(conn *sql.DB) ([]edge, OriginStats, error) {
 		}
 	}
 	return out.slice(), st, rows.Err()
+}
+
+// sourcesFromSenders returns the sources whose mail comes from one of the given
+// senders. Matching is a case-insensitive substring of the whole sender field,
+// so "jira@" covers `Someone (Jira) <jira@example.atlassian.net>` without
+// needing the display name. Resolved in one query up front rather than per
+// document: the scan that follows visits tens of thousands of rows.
+func sourcesFromSenders(conn *sql.DB, senders []string) (map[int64]bool, error) {
+	excluded := make(map[int64]bool)
+	if len(senders) == 0 {
+		return excluded, nil
+	}
+
+	clauses := make([]string, 0, len(senders))
+	args := make([]any, 0, len(senders))
+	for _, sender := range senders {
+		sender = strings.TrimSpace(sender)
+		if sender == "" {
+			continue
+		}
+		clauses = append(clauses, "lower(COALESCE(json_extract(metadata, '$.sender'), '')) LIKE ?")
+		args = append(args, "%"+strings.ToLower(sender)+"%")
+	}
+	if len(clauses) == 0 {
+		return excluded, nil
+	}
+
+	rows, err := conn.Query(`
+		SELECT DISTINCT source_id FROM documents
+		WHERE chunk_index = 0 AND metadata IS NOT NULL AND json_valid(metadata)
+		  AND (`+strings.Join(clauses, " OR ")+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("resolve excluded senders: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan excluded source: %w", err)
+		}
+		excluded[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	slog.Info("graph: senders excluded from ticket mentions",
+		"patterns", len(clauses), "sources", len(excluded))
+	return excluded, nil
 }
 
 // bracketedTargetsIn pulls link targets out of a frontmatter value, which YAML

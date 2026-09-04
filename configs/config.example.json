@@ -54,6 +54,12 @@
         "fts_weight": 0.3,
         "exclude_collections": []
     },
+    "graph": {
+        "mention_exclude_senders": [
+            "jira@",
+            "noreply@"
+        ]
+    },
     "ocr": {
         "enabled": true,
         "languages": [
