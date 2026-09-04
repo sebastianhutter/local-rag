@@ -54,6 +54,32 @@ type GraphConfig struct {
 	// Empty by default: which senders are machines is a fact about a corpus,
 	// not about the software.
 	MentionExcludeSenders []string `json:"mention_exclude_senders"`
+
+	// TerraformRegistryPaths maps a module-registry prefix to the paths its
+	// modules occupy in indexed repositories, so a registry-style
+	// `source = "<host>/<namespace>/<name>/<system>"` resolves to the module it
+	// refers to. The module name is appended to each mapped path in turn and
+	// matched against the end of an indexed directory path:
+	//
+	//   "registry.example.com/modules": ["terraform/v2", "terraform/modules"]
+	//   source = "registry.example.com/modules/kms/aws"
+	//     -> a directory ending in terraform/v2/kms, else terraform/modules/kms
+	//
+	// Configuration rather than convention, because there is no convention. The
+	// module *name* is the only part reliably shared between a registry address
+	// and a checkout, and resolving by name alone was measured at 37% unique
+	// and 58% ambiguous -- names like "s3" or "backup" match a directory in
+	// nearly every repository.
+	//
+	// A list rather than one path, because one registry's modules routinely
+	// live in several repositories, and a module can exist in two of them at
+	// once: a v1 and a v2 layout side by side during a migration. Order is
+	// therefore meaningful -- the first path that matches wins, so putting the
+	// newer layout first expresses which one callers mean.
+	//
+	// A registry with no entry, and any public registry, is left unresolved
+	// rather than guessed at.
+	TerraformRegistryPaths map[string][]string `json:"terraform_registry_paths"`
 }
 
 // OCRConfig holds settings for optional tesseract-based OCR fallback on scanned PDFs.
@@ -360,7 +386,8 @@ func defaults() *Config {
 			ExcludeCollections: []string{},
 		},
 		Graph: GraphConfig{
-			MentionExcludeSenders: []string{},
+			MentionExcludeSenders:  []string{},
+			TerraformRegistryPaths: map[string][]string{},
 		},
 		OCR: OCRConfig{
 			Enabled:       false,

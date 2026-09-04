@@ -479,7 +479,8 @@ func autoRebuildGraph() {
 	defer conn.Close()
 
 	stats, err := graph.Rebuild(conn, graph.RebuildOptions{
-		MentionExcludeSenders: cfg.Graph.MentionExcludeSenders,
+		MentionExcludeSenders:  cfg.Graph.MentionExcludeSenders,
+		TerraformRegistryPaths: cfg.Graph.TerraformRegistryPaths,
 	})
 	if err != nil {
 		slog.Warn("graph rebuild failed; the stored graph is unchanged", "err", err)

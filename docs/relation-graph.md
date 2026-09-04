@@ -86,11 +86,11 @@ CREATE TABLE graph_edges (
 
 Two labels, because they answer different questions:
 
-- **`rel` — what does this relation mean?** `links_to`, `child_of`, `mentions`, or
-  a frontmatter property name such as `related` or `parent`. This is what a
+- **`rel` — what does this relation mean?** `links_to`, `child_of`, `mentions`,
+  `depends_on`, or a frontmatter property name such as `related` or `parent`. This is what a
   caller filters on when it wants a page's parent but not passing mentions.
 - **`origin` — where did this edge come from?** `wikilink`, `frontmatter`,
-  `confluence`, `ticket-regex`. Each origin is rebuilt independently, so one
+  `confluence`, `jira`, `terraform`, `ticket-regex`. Each origin is rebuilt independently, so one
   class can be regenerated or discarded without touching the others.
 
 That separation costs nothing today and matters later: a parsed wikilink and an
@@ -100,11 +100,11 @@ second ever needs throwing away wholesale.
 Unlike the `vec0` virtual tables, this one takes foreign keys — so pruning a
 source or deleting a collection removes its edges automatically.
 
-## The Four Origins
+## The Five Origins
 
-All four are **parsed, not inferred**. Nothing calls a model, so a rebuild is a
-scan: about 2 seconds for the three metadata-only origins and 20 seconds for the
-one that reads content.
+All five are **parsed, not inferred**. Nothing calls a model, so a rebuild is a
+scan: about 2 seconds for the three metadata-only origins, and 20 seconds each
+for the two that read content.
 
 ### `confluence` — page hierarchy
 
@@ -175,6 +175,40 @@ skipped as not-a-note.
 
 *2,395 edges.*
 
+### `terraform` — module dependencies
+
+A Terraform file's `source` argument links it to the module it calls, which
+answers the two questions an infrastructure corpus is actually asked: *what
+depends on this module*, and *what does this root module pull in*.
+
+Three source forms resolve, for three different reasons:
+
+| form | how it resolves | measured |
+|---|---|---|
+| `source = "../../modules/kms"` | arithmetic against the calling file | 702 of 841 (83%) |
+| `source = "git::https://host/terraform/aws/modules/kms.git?ref=2.8.1"` | the URL contains the repository path, matched as a directory suffix | 2,499 of 2,510 (**100%**) |
+| `source = "registry/kms/aws"` | only via `graph.terraform_registry_paths` | 1,462 of 1,673 (87%) |
+
+A provider address in `required_providers` uses the same `source` keyword and is
+not a module; a public registry module is not in the corpus. Both are counted as
+skipped rather than unresolved, so the unresolved figure keeps meaning something.
+
+**Why the registry form needs configuration.** A registry address shares only
+the module *name* with a checkout, and names are generic: resolving by name
+alone measured **37% unique and 58% ambiguous**, because `s3` matches nine
+indexed directories and `backup` six. So a caller states where a given
+registry's modules live. The value is a list, since one registry's modules span
+repositories and a module can exist under two layouts at once during a
+migration — of 61 names measured, 40 resolved in one path and 7 in two. Order is
+precedence: first match wins. A `//subdir` selector survives, pointing at the
+nested module rather than the parent.
+
+An edge points at the module's **entry file** — `main.tf`, else the
+alphabetically first `.tf` in the directory — because both endpoints have to be
+sources and a directory is not one.
+
+*4,363 edges, 208 unresolved, 1,962 skipped.*
+
 ### `ticket-regex` — mentions of an issue key
 
 Any document naming a ticket is linked to that ticket's own record. This is the
@@ -199,7 +233,7 @@ candidate mention edges (37%) came from those two senders.**
 
 ## The Edges in Action
 
-All four origins at once, on an invented corpus. A search has returned two
+All five origins at once, on an invented corpus. A search has returned two
 results — a vault note and a wiki page — and the traversal walks out from them:
 
 ```mermaid
@@ -219,6 +253,12 @@ flowchart LR
 
     subgraph tracker["Jira project (project collection)"]
         P42["PROJ-42"]
+        EPIC["Platform Foundations<br/>(epic)"]
+    end
+
+    subgraph infra["Terraform repositories (code collections)"]
+        ROOT["live/prod/main.tf"]
+        MOD["modules/kms/main.tf"]
     end
 
     subgraph elsewhere["Mail and commit history"]
@@ -234,12 +274,14 @@ flowchart LR
     MAIL -->|"mentions · ticket-regex"| P42
     CMT -->|"mentions · ticket-regex"| P42
     RUN -.->|"links_to, but a hub"| IDX
+    P42 -->|"child_of · jira"| EPIC
+    ROOT -->|"depends_on · terraform"| MOD
 
     classDef hub stroke-dasharray: 4 3
     class IDX hub
 ```
 
-Five things in that picture are worth naming, because each is a decision taken
+Seven things in that picture are worth naming, because each is a decision taken
 somewhere in this document:
 
 1. **`Rollout Checklist` is returned even though the seed does not link to it.**
@@ -255,7 +297,13 @@ somewhere in this document:
    contains a word of the original query, and neither is in the same collection
    as either seed. This is the one relation that crosses corpora, and it is what
    a regular expression over an issue key buys.
-5. **`Projects Index` is linked from the seed and is still not returned.** With
+5. **`PROJ-42` reaches its epic, and the epic is returned even if it has forty
+   other children.** A parent is exempt from hub suppression and ranks as though
+   nothing pointed at it — an epic's degree counts its children, which says
+   nothing about how well it answers "what does this belong to".
+6. **`live/prod/main.tf` depends on a module** by way of a `source` argument, so
+   "what depends on this module" is a traversal rather than a grep.
+7. **`Projects Index` is linked from the seed and is still not returned.** With
    412 edges it is a table of contents: as a route it would drag in half the
    vault, and as an answer it says nothing. `hub_cap` stops the traversal there
    and `IncludeHubs` overrides that for a caller who wants it.
@@ -345,6 +393,7 @@ reworded, because the agent had no way to say "show me what surrounds this".
 ```bash
 local-rag graph rebuild                      # all origins
 local-rag graph rebuild --origin wikilink    # one class, others untouched
+local-rag graph rebuild --origin terraform  # after adding a registry mapping
 local-rag graph stats                        # counts by origin and relation, top hubs
 
 local-rag neighbors "Storage Architecture"   # by path substring

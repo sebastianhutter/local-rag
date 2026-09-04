@@ -58,7 +58,13 @@
         "mention_exclude_senders": [
             "jira@",
             "noreply@"
-        ]
+        ],
+        "terraform_registry_paths": {
+            "registry.example.com/modules": [
+                "terraform/v2",
+                "terraform/modules"
+            ]
+        }
     },
     "ocr": {
         "enabled": true,

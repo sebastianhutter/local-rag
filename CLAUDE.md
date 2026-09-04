@@ -96,7 +96,7 @@ Vector search is two-stage for speed: a fast Hamming-distance KNN over binary-qu
 
 **Relation graph** (see `docs/relation-graph.md`): `graph_edges` records parsed relations between indexed *sources* — Confluence page hierarchy, frontmatter properties, wikilinks and ticket-key mentions — so a search result can be expanded into what it is connected to rather than only what resembles it. Endpoints are sources, not documents: a relation belongs to the file, and `sources.id` survives a re-embed while a document id does not. Every edge carries a `rel` (what it means) and an `origin` (where it came from), and origins are rebuilt independently. Nothing calls a model; `local-rag graph rebuild` is a scan, not an indexing run.
 
-Measured on a real database: 23,613 edges over 11,888 connected sources — 14,873 ticket mentions, 4,344 Jira issue parents, 2,395 wikilinks, 1,749 Confluence page parents, 252 typed frontmatter relations. Jira and Confluence hierarchy share `rel = 'child_of'` but keep separate origins, because the two syncs are independent. Ticket mentions are the only class that crosses corpora (a mail, a commit and a note all reach the same issue) and cost one regex. Replaying 60 queries taken from real usage, **78% gained at least one document that vector + FTS could not reach at six times the normal `top_k`**.
+Measured on a real database: ~28,000 edges — 13,106 ticket mentions, 4,363 Terraform module dependencies, 4,322 Jira issue parents, 2,395 wikilinks, 2,380 Confluence page parents, 252 typed frontmatter relations. Jira and Confluence hierarchy share `rel = 'child_of'` but keep separate origins, because the two syncs are independent. Ticket mentions are the only class that crosses corpora (a mail, a commit and a note all reach the same issue) and cost one regex. Replaying 60 queries taken from real usage, **78% gained at least one document that vector + FTS could not reach at six times the normal `top_k`**.
 
 A parent is exempt from hub suppression and ranks as though nothing pointed at it: an epic's degree counts its children, which says nothing about how well it answers "what does this belong to", and without the ranking exemption it would sort last and be cut by the per-seed cap.
 
@@ -223,7 +223,7 @@ CREATE VIRTUAL TABLE documents_fts USING fts5(
 -- rel = what the relation means ('links_to', 'child_of', 'mentions', or a
 -- frontmatter property name such as 'related' or 'parent').
 -- origin = where it came from ('wikilink', 'frontmatter', 'confluence',
--- 'jira', 'ticket-regex'), so one class can be rebuilt or discarded alone.
+-- 'jira', 'terraform', 'ticket-regex'), so one class can be rebuilt alone.
 CREATE TABLE graph_edges (
     src_source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
     dst_source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
@@ -438,7 +438,10 @@ Config file location: `~/.local-rag/config.json`
     "exclude_collections": []
   },
   "graph": {
-    "mention_exclude_senders": ["jira@", "noreply@"]
+    "mention_exclude_senders": ["jira@", "noreply@"],
+    "terraform_registry_paths": {
+      "registry.example.com/modules": ["terraform/v2", "terraform/modules"]
+    }
   },
   "ocr": {
     "enabled": false,
@@ -471,6 +474,12 @@ Note that `chunk_size_tokens` counts whitespace-separated **words**, not model t
 It exists because a collection can be large enough to crowd the results without being wrong. Measured on a real database: an archive of Claude session transcripts (`Notes/_Claude Sessions/`) was 261 notes — 11% of Obsidian sources — but 311,014 documents: 91% of the Obsidian collection and 40% of the entire database, at a median 612 chunks per note against 7 for an ordinary note. Across 60 queries replayed from real usage it took **50% of all top-10 result slots**. That alone does not make those results wrong — for a question the transcript actually discussed, it may be the best source — but excluding it from the default sweep roughly doubled what graph-style neighbour expansion could reach (120 → 259 candidate documents), because a transcript chunk occupies a seed slot without connecting to anything. The archive stays searchable with `--collection claude-sessions`; it just stops competing for every query. Editable under **Settings → Search**.
 
 Note that exclusion counts as a filter, so it widens the vector candidate pool and the FTS candidate limit exactly as the other filters do — a collection can be excluded without the result count collapsing.
+
+**`graph.terraform_registry_paths`** (optional, default `{}`): where a private module registry's modules live in an indexed checkout, so a registry-style `source = "<host>/<namespace>/<name>/<system>"` resolves to the module it names. The module name is appended to each mapped path in turn and matched against the end of an indexed directory path. Editable under **Settings → Graph**.
+
+Configuration rather than convention, because there is no convention. A registry address shares only the module *name* with a checkout, and resolving by name alone was measured at **37% unique and 58% ambiguous** — names like `s3` or `backup` match a directory in nearly every repository. Relative and `git::` sources need no entry (a `git::` URL contains the repository path, so it resolves by path suffix at 100%), and a public registry is left alone.
+
+The value is a **list**, because one registry's modules routinely span repositories, and a module can exist in two of them at once — a v1 and a v2 layout side by side during a migration. Measured on a real corpus: of 61 registry module names, 40 resolved in one path and **7 existed in two**. Order is therefore precedence: the first path that matches wins, so the layout callers actually mean goes first. A `//subdir` selector survives resolution, pointing at the nested module rather than its parent.
 
 **`graph.mention_exclude_senders`** (optional, default `[]`): senders whose mail contributes no ticket-mention edges, matched as a case-insensitive substring of the sender field — `"jira@"` covers `Someone (Jira) <jira@example.atlassian.net>` without needing the display name. Editable under **Settings → Graph**; takes effect on the next `graph rebuild`.
 

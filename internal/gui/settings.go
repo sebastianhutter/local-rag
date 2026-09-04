@@ -3,6 +3,7 @@ package gui
 import (
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -567,6 +568,13 @@ func (a *App) buildGraphTab(cfg *config.Config) fyne.CanvasObject {
 		cfg.Graph.MentionExcludeSenders = senders
 	}
 
+	registryEntry := widget.NewMultiLineEntry()
+	registryEntry.SetText(formatRegistryPaths(cfg.Graph.TerraformRegistryPaths))
+	registryEntry.SetPlaceHolder("registry.example.com/modules = terraform/v2, terraform/modules")
+	registryEntry.OnChanged = func(s string) {
+		cfg.Graph.TerraformRegistryPaths = parseRegistryPaths(s)
+	}
+
 	return container.NewVScroll(container.NewVBox(
 		widget.NewCard("Ticket mentions", "One sender per line, matched anywhere in the sender field",
 			container.NewVBox(
@@ -577,8 +585,61 @@ func (a *App) buildGraphTab(cfg *config.Config) fyne.CanvasObject {
 					"specific and crowds out the real references."),
 				sendersEntry,
 			)),
+		widget.NewCard("Terraform module registries", "One per line: registry prefix = path, path, ...",
+			container.NewVBox(
+				widget.NewLabel("Where a private registry's modules live in your checkouts, so that\n"+
+					"source = \"registry/<name>/aws\" can be linked to the module it means.\n"+
+					"A module name alone is too generic to resolve -- \"s3\" matches a folder\n"+
+					"in almost every repo -- so the path has to be stated.\n\n"+
+					"List several paths where one registry spans repositories, or where a\n"+
+					"module exists under two layouts at once: the first match wins, so put\n"+
+					"the layout callers actually mean first. Relative and git:: sources need\n"+
+					"no entry; public registries are left alone."),
+				registryEntry,
+			)),
 		widget.NewLabel("Changes take effect on the next 'local-rag graph rebuild'."),
 	))
+}
+
+// formatRegistryPaths renders the map as one "prefix = path, path" per line.
+func formatRegistryPaths(m map[string][]string) string {
+	prefixes := make([]string, 0, len(m))
+	for prefix := range m {
+		prefixes = append(prefixes, prefix)
+	}
+	sort.Strings(prefixes)
+	var lines []string
+	for _, prefix := range prefixes {
+		lines = append(lines, prefix+" = "+strings.Join(m[prefix], ", "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// parseRegistryPaths reads that format back. A line without an "=" is
+// incomplete rather than wrong -- someone is still typing it -- so it is
+// ignored instead of discarding what is already there.
+func parseRegistryPaths(text string) map[string][]string {
+	out := map[string][]string{}
+	for _, line := range strings.Split(text, "\n") {
+		prefix, rest, found := strings.Cut(line, "=")
+		if !found {
+			continue
+		}
+		prefix = strings.TrimSpace(prefix)
+		if prefix == "" {
+			continue
+		}
+		var paths []string
+		for _, p := range strings.Split(rest, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				paths = append(paths, p)
+			}
+		}
+		if len(paths) > 0 {
+			out[prefix] = paths
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------

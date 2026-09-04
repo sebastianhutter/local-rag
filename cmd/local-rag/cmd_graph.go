@@ -42,8 +42,9 @@ Origins: ` + strings.Join(graph.AllOrigins, ", "),
 		defer conn.Close()
 
 		stats, err := graph.Rebuild(conn, graph.RebuildOptions{
-			Origins:               graphOrigins,
-			MentionExcludeSenders: cfg.Graph.MentionExcludeSenders,
+			Origins:                graphOrigins,
+			MentionExcludeSenders:  cfg.Graph.MentionExcludeSenders,
+			TerraformRegistryPaths: cfg.Graph.TerraformRegistryPaths,
 		})
 		if err != nil {
 			return err
