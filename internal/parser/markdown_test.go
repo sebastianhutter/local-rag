@@ -242,7 +242,7 @@ func TestParseMarkdownFrontmatterLinks(t *testing.T) {
 		},
 		{
 			name:          "properties without wikilinks are ignored",
-			input:         "---\ntags:\n  - copebit\nstatus: draft\ncount: 3\n---\n\nBody.\n",
+			input:         "---\ntags:\n  - project\nstatus: draft\ncount: 3\n---\n\nBody.\n",
 			wantLinks:     nil,
 			wantPropLinks: nil,
 		},

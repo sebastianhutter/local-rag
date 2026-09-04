@@ -64,8 +64,8 @@ func TestBuildSourceURI(t *testing.T) {
 	}
 
 	// Markdown with URL metadata → Atlassian URL
-	uri = buildSourceURI("/path/to/jira-issue.md", "markdown", "atlassian", map[string]any{"url": "https://copebit.atlassian.net/browse/CB-123"}, cfg)
-	if uri != "https://copebit.atlassian.net/browse/CB-123" {
+	uri = buildSourceURI("/path/to/jira-issue.md", "markdown", "atlassian", map[string]any{"url": "https://example.atlassian.net/browse/PROJ-123"}, cfg)
+	if uri != "https://example.atlassian.net/browse/PROJ-123" {
 		t.Errorf("expected Atlassian URL for markdown with url metadata, got %v", uri)
 	}
 
