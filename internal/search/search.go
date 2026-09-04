@@ -23,6 +23,11 @@ type SearchResult struct {
 	Metadata   map[string]any
 	Score      float64
 	Collection string
+
+	// SourceID identifies the file this chunk came from. Exposed so a caller
+	// can hand a result straight to a graph traversal instead of trying to
+	// address a source by path.
+	SourceID   int64
 	SourcePath string
 	SourceType string
 }
@@ -407,18 +412,19 @@ func RRFMerge(vecResults, ftsResults []rankedResult, k int, vectorWeight, ftsWei
 // fetchResult loads a SearchResult from the database for a given document ID.
 func fetchResult(db *sql.DB, docID int64, score float64) (*SearchResult, error) {
 	var content, collectionName, sourcePath, sourceType string
+	var sourceID int64
 	var title sql.NullString
 	var metadataStr sql.NullString
 
 	err := db.QueryRow(
 		`SELECT d.content, d.title, d.metadata,
-		        c.name, s.source_path, s.source_type
+		        c.name, s.id, s.source_path, s.source_type
 		 FROM documents d
 		 JOIN collections c ON d.collection_id = c.id
 		 JOIN sources s ON d.source_id = s.id
 		 WHERE d.id = ?`,
 		docID,
-	).Scan(&content, &title, &metadataStr, &collectionName, &sourcePath, &sourceType)
+	).Scan(&content, &title, &metadataStr, &collectionName, &sourceID, &sourcePath, &sourceType)
 	if err != nil {
 		return nil, err
 	}
@@ -439,6 +445,7 @@ func fetchResult(db *sql.DB, docID int64, score float64) (*SearchResult, error) 
 		Metadata:   metadata,
 		Score:      score,
 		Collection: collectionName,
+		SourceID:   sourceID,
 		SourcePath: sourcePath,
 		SourceType: sourceType,
 	}, nil

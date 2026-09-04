@@ -1,0 +1,333 @@
+package graph
+
+import (
+	"database/sql"
+	"fmt"
+	"strings"
+	"testing"
+)
+
+// addCollection and addEdge build a graph directly, so a traversal test does
+// not depend on how edges were derived.
+func addCollection(t *testing.T, db *sql.DB, name string) int64 {
+	t.Helper()
+	res, err := db.Exec("INSERT INTO collections (name) VALUES (?)", name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+	return id
+}
+
+func addEdge(t *testing.T, db *sql.DB, src, dst int64, rel, origin string) {
+	t.Helper()
+	if _, err := db.Exec(
+		"INSERT OR IGNORE INTO graph_edges (src_source_id, dst_source_id, rel, origin) VALUES (?, ?, ?, ?)",
+		src, dst, rel, origin,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// setupExpandDB adds the collections table and the collection_id column that
+// describe() joins on, which the derivation tests do not need.
+func setupExpandDB(t *testing.T) (*sql.DB, int64) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.Exec(`
+		CREATE TABLE collections (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);
+		CREATE TABLE sources (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			collection_id INTEGER NOT NULL,
+			source_type TEXT NOT NULL,
+			source_path TEXT NOT NULL
+		);
+		CREATE TABLE documents (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			source_id INTEGER NOT NULL,
+			chunk_index INTEGER NOT NULL,
+			title TEXT,
+			content TEXT NOT NULL DEFAULT '',
+			metadata TEXT
+		);
+		CREATE TABLE graph_edges (
+			src_source_id INTEGER NOT NULL,
+			dst_source_id INTEGER NOT NULL,
+			rel TEXT NOT NULL,
+			origin TEXT NOT NULL,
+			PRIMARY KEY (src_source_id, dst_source_id, rel)
+		);`); err != nil {
+		t.Fatal(err)
+	}
+	return db, addCollection(t, db, "vault")
+}
+
+func addNode(t *testing.T, db *sql.DB, collID int64, name, content string) int64 {
+	t.Helper()
+	res, err := db.Exec(
+		"INSERT INTO sources (collection_id, source_type, source_path) VALUES (?, 'markdown', ?)",
+		collID, "/vault/"+name+".md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+	if _, err := db.Exec(
+		"INSERT INTO documents (source_id, chunk_index, title, content) VALUES (?, 0, ?, ?)",
+		id, name, content); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func ids(neighbours []Neighbour) []int64 {
+	out := make([]int64, len(neighbours))
+	for i, n := range neighbours {
+		out[i] = n.SourceID
+	}
+	return out
+}
+
+func TestExpandOneHop(t *testing.T) {
+	db, coll := setupExpandDB(t)
+	seed := addNode(t, db, coll, "Seed", "seed body")
+	out := addNode(t, db, coll, "Outbound", "outbound body")
+	in := addNode(t, db, coll, "Inbound", "inbound body")
+	addNode(t, db, coll, "Unrelated", "nothing")
+
+	addEdge(t, db, seed, out, RelLinksTo, OriginWikilink)
+	// Direction must not matter: something linking *to* the seed is as
+	// relevant as something the seed links to.
+	addEdge(t, db, in, seed, RelLinksTo, OriginWikilink)
+
+	got, err := Expand(db, []int64{seed}, ExpandOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d neighbours (%v), want 2", len(got), ids(got))
+	}
+	for _, n := range got {
+		if n.SourceID != out && n.SourceID != in {
+			t.Errorf("unexpected neighbour %d", n.SourceID)
+		}
+		if n.Hops != 1 {
+			t.Errorf("Hops = %d, want 1", n.Hops)
+		}
+		if n.ViaID != seed {
+			t.Errorf("ViaID = %d, want %d", n.ViaID, seed)
+		}
+		if n.Collection != "vault" || n.Title == "" || n.Snippet == "" {
+			t.Errorf("neighbour not described: %+v", n)
+		}
+	}
+}
+
+// A seed is never returned as its own neighbour, and neither is a node already
+// reached at a nearer hop.
+func TestExpandExcludesSeedsAndRepeats(t *testing.T) {
+	db, coll := setupExpandDB(t)
+	a := addNode(t, db, coll, "A", "a")
+	b := addNode(t, db, coll, "B", "b")
+	addEdge(t, db, a, b, RelLinksTo, OriginWikilink)
+	addEdge(t, db, b, a, RelMentions, OriginTicket)
+
+	got, err := Expand(db, []int64{a, b}, ExpandOptions{Hops: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %v, want no neighbours when both ends are seeds", ids(got))
+	}
+}
+
+func TestExpandTwoHops(t *testing.T) {
+	db, coll := setupExpandDB(t)
+	seed := addNode(t, db, coll, "Seed", "s")
+	mid := addNode(t, db, coll, "Mid", "m")
+	far := addNode(t, db, coll, "Far", "f")
+	addEdge(t, db, seed, mid, RelLinksTo, OriginWikilink)
+	addEdge(t, db, mid, far, RelLinksTo, OriginWikilink)
+
+	oneHop, err := Expand(db, []int64{seed}, ExpandOptions{Hops: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(oneHop) != 1 || oneHop[0].SourceID != mid {
+		t.Errorf("one hop = %v, want [%d]", ids(oneHop), mid)
+	}
+
+	twoHop, err := Expand(db, []int64{seed}, ExpandOptions{Hops: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(twoHop) != 2 {
+		t.Fatalf("two hops = %v, want 2 neighbours", ids(twoHop))
+	}
+	if twoHop[0].SourceID != mid || twoHop[0].Hops != 1 {
+		t.Errorf("nearest neighbour is %+v, want mid at hop 1", twoHop[0])
+	}
+	if twoHop[1].SourceID != far || twoHop[1].Hops != 2 {
+		t.Errorf("far neighbour is %+v, want far at hop 2", twoHop[1])
+	}
+	if twoHop[1].ViaID != mid {
+		t.Errorf("ViaID = %d, want %d", twoHop[1].ViaID, mid)
+	}
+}
+
+// Hops beyond MaxHops are clamped rather than honoured.
+func TestExpandClampsHops(t *testing.T) {
+	db, coll := setupExpandDB(t)
+	chain := make([]int64, 5)
+	for i := range chain {
+		chain[i] = addNode(t, db, coll, fmt.Sprintf("N%d", i), "x")
+	}
+	for i := 0; i < len(chain)-1; i++ {
+		addEdge(t, db, chain[i], chain[i+1], RelLinksTo, OriginWikilink)
+	}
+	got, err := Expand(db, []int64{chain[0]}, ExpandOptions{Hops: 99, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != MaxHops {
+		t.Errorf("got %d neighbours (%v), want %d with hops clamped", len(got), ids(got), MaxHops)
+	}
+}
+
+// The rule that matters most: a hub is a destination, not a corridor.
+func TestExpandHubCap(t *testing.T) {
+	db, coll := setupExpandDB(t)
+	seed := addNode(t, db, coll, "Seed", "s")
+	hub := addNode(t, db, coll, "Hub", "h")
+	addEdge(t, db, seed, hub, RelMentions, OriginTicket)
+	// Give the hub a large degree.
+	for i := 0; i < 12; i++ {
+		other := addNode(t, db, coll, fmt.Sprintf("Other%d", i), "o")
+		addEdge(t, db, hub, other, RelMentions, OriginTicket)
+	}
+
+	// The hub itself is still returned: it is a legitimate destination.
+	got, err := Expand(db, []int64{seed}, ExpandOptions{Hops: 2, HubCap: 5, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].SourceID != hub {
+		t.Fatalf("got %v, want just the hub %d -- expansion must not pass through it", ids(got), hub)
+	}
+
+	// Raise the cap above the hub's degree and its neighbours appear.
+	got, err = Expand(db, []int64{seed}, ExpandOptions{Hops: 2, HubCap: 50, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 13 {
+		t.Errorf("got %d neighbours with a high cap, want 13", len(got))
+	}
+}
+
+// A seed that is itself a hub contributes nothing, whatever put it in the
+// result set: a document enumerating hundreds of tickets is not a neighbourhood.
+func TestExpandHubSeedIsNotExpanded(t *testing.T) {
+	db, coll := setupExpandDB(t)
+	hub := addNode(t, db, coll, "Hub", "h")
+	for i := 0; i < 10; i++ {
+		other := addNode(t, db, coll, fmt.Sprintf("Other%d", i), "o")
+		addEdge(t, db, hub, other, RelMentions, OriginTicket)
+	}
+	got, err := Expand(db, []int64{hub}, ExpandOptions{HubCap: 5, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %v, want nothing expanded from a hub seed", ids(got))
+	}
+}
+
+// Ranking: nearer first, then the more specific neighbour. A node that two
+// things point at says more than one four hundred things mention.
+func TestExpandRanksRareNeighboursFirst(t *testing.T) {
+	db, coll := setupExpandDB(t)
+	seed := addNode(t, db, coll, "Seed", "s")
+	rare := addNode(t, db, coll, "Rare", "r")
+	common := addNode(t, db, coll, "Common", "c")
+	addEdge(t, db, seed, rare, RelLinksTo, OriginWikilink)
+	addEdge(t, db, seed, common, RelLinksTo, OriginWikilink)
+	for i := 0; i < 6; i++ {
+		other := addNode(t, db, coll, fmt.Sprintf("Other%d", i), "o")
+		addEdge(t, db, common, other, RelMentions, OriginTicket)
+	}
+
+	got, err := Expand(db, []int64{seed}, ExpandOptions{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) < 2 {
+		t.Fatalf("got %v, want at least 2", ids(got))
+	}
+	if got[0].SourceID != rare {
+		t.Errorf("first neighbour is %d (degree %d), want the rarer %d",
+			got[0].SourceID, got[0].Degree, rare)
+	}
+}
+
+func TestExpandFiltersAndLimit(t *testing.T) {
+	db, coll := setupExpandDB(t)
+	seed := addNode(t, db, coll, "Seed", "s")
+	linked := addNode(t, db, coll, "Linked", "l")
+	mentioned := addNode(t, db, coll, "Mentioned", "m")
+	addEdge(t, db, seed, linked, RelLinksTo, OriginWikilink)
+	addEdge(t, db, seed, mentioned, RelMentions, OriginTicket)
+
+	byRel, err := Expand(db, []int64{seed}, ExpandOptions{Rels: []string{RelLinksTo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byRel) != 1 || byRel[0].SourceID != linked {
+		t.Errorf("rel filter gave %v, want [%d]", ids(byRel), linked)
+	}
+
+	byOrigin, err := Expand(db, []int64{seed}, ExpandOptions{Origins: []string{OriginTicket}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byOrigin) != 1 || byOrigin[0].SourceID != mentioned {
+		t.Errorf("origin filter gave %v, want [%d]", ids(byOrigin), mentioned)
+	}
+
+	limited, err := Expand(db, []int64{seed}, ExpandOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(limited) != 1 {
+		t.Errorf("limit gave %d neighbours, want 1", len(limited))
+	}
+}
+
+func TestExpandNoSeeds(t *testing.T) {
+	db, _ := setupExpandDB(t)
+	got, err := Expand(db, nil, ExpandOptions{})
+	if err != nil || got != nil {
+		t.Errorf("Expand(nil) = %v, %v; want nil, nil", got, err)
+	}
+}
+
+func TestSnippet(t *testing.T) {
+	if got := snippet("  spaced   out\ntext  "); got != "spaced out text" {
+		t.Errorf("snippet collapsed to %q", got)
+	}
+	long := strings.Repeat("word ", 100)
+	got := snippet(long)
+	if len([]rune(got)) > snippetLen+3 {
+		t.Errorf("snippet is %d runes, want <= %d", len([]rune(got)), snippetLen+3)
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Errorf("truncated snippet does not end in an ellipsis: %q", got)
+	}
+	// Multi-byte content must not be cut mid-rune.
+	if got := snippet(strings.Repeat("äöü ", 100)); !strings.HasSuffix(got, "...") {
+		t.Errorf("unexpected multi-byte snippet: %q", got)
+	}
+}

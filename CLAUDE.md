@@ -100,6 +100,12 @@ Measured on a real database: 28,491 edges over 18,597 connected sources — 24,0
 
 Expansion cost is bounded by the *degree* of the nodes it starts from, not by the number of nodes, so a hub cap is not a refinement but a precondition: uncapped, expansion returned 24 documents per query instead of 3. The highest-degree sources here are a document enumerating 570 ticket keys and the vault's folder-index notes.
 
+**Traversal**: `graph.Expand` walks out from seed sources, undirected — a page's children are as relevant as its parent. Two rules do the work. A **hub is a destination, not a corridor**: expansion never passes *through* a node whose degree exceeds `hub_cap` (default 25), including a seed, though such a node is still returned when something else reaches it. And ranking is by hops, then **ascending degree**, because degree stands in for specificity: a source two things point at says far more than one four hundred things mention.
+
+Neighbours are collapsed by title before the limit is applied. Without that, automated notification mail sinks the results: one ticket attracts dozens of near-identical machine mails, each with a degree of 1, so rarest-first ranking hands them every slot. 30% of the mention edges in a real database come from tracker notifications.
+
+Traversal returns titles, paths and one-line snippets — never full content. That is the whole economic case: a median expansion of three neighbours costs about 75 tokens against roughly 3,500 for another `rag_search`, measured over 388 real calls.
+
 **Pruning**: Indexing removes what indexing cannot see. Before indexing `obsidian`, `code`, `project` or `all`, a prune pass drops sources whose file no longer exists on disk, so deleted and moved files leave search results without a manual step; `--no-prune` skips it. For `obsidian` it also drops sources the vault walk would no longer visit — anything inside a folder named in `obsidian_exclude_folders`, an Obsidian internal directory, or a dot-directory. Without that, adding a folder to the exclude list stranded its documents permanently: the files still exist, so the existence check kept them, while the walk never refreshed them again. Both reasons are logged separately (`kind=file` versus `kind=excluded-folder`), so a mistyped exclude entry shows up as a surprising count rather than a silent deletion. `walkVault` and the prune predicate share `vaultSkipsDir` precisely so they cannot drift. Two deliberate narrowings: a cloud placeholder is never pruned (it exists, and skipping it is temporary), and an unsupported extension is not either — otherwise a change to the parser's extension map would become silent data loss. The standalone `local-rag prune [COLLECTION]` covers every collection type — including email, calibre and rss, which are pruned against their source databases rather than the filesystem. `prune --vectors` is a separate repair path: it deletes embeddings in `vec_documents`/`vec_documents_bin` whose `document_id` no longer resolves, which CASCADE cannot do because the vec0 virtual tables have no foreign keys.
 
 ---
@@ -263,6 +269,7 @@ local-rag/
 │       ├── cmd_collections.go       # collections list/info/delete/export/paths
 │       ├── cmd_prune.go             # prune, prune --vectors
 │       ├── cmd_graph.go             # graph rebuild, graph stats
+│       ├── cmd_neighbors.go         # neighbors
 │       ├── cmd_status.go            # status
 │       ├── cmd_serve.go             # serve (stdio / SSE)
 │       └── cmd_gui.go               # gui
@@ -281,7 +288,7 @@ local-rag/
 │   ├── embeddings/                  # Ollama embedding client + host resolution
 │   ├── chunker/                     # Text chunking strategies (per file type)
 │   ├── search/                      # Hybrid search engine (vector + FTS + RRF)
-│   ├── graph/                       # Relation graph: edge derivation per origin
+│   ├── graph/                       # Relation graph: edge derivation per origin, traversal
 │   ├── parser/                      # File parsers (markdown, pdf, docx, epub, html, code, rss, email, calibre)
 │   ├── indexer/                     # Source indexers (obsidian, email, calibre, rss, git, project),
 │   │                                #   shared batching (batch.go), pruning (prune.go)
@@ -342,6 +349,8 @@ local-rag collections paths update NAME \        # Rewrite path prefixes in-plac
 local-rag graph rebuild                  # Derive all edge origins and replace the stored set
 local-rag graph rebuild --origin wikilink,confluence   # Rebuild only these origins
 local-rag graph stats                    # Edge counts by origin and relation, plus the top hubs
+local-rag neighbors SOURCE               # What a source is connected to (id or path substring)
+local-rag neighbors 130057 --rel related --hops 2 --hub-cap 40 --top 10
 
 # Status and GUI
 local-rag status                        # Overall stats: collections, doc counts, DB size, Ollama status
@@ -353,11 +362,16 @@ local-rag -v, --verbose                 # Debug logging (global flag)
 local-rag serve                         # Start MCP server (stdio transport)
 local-rag serve --port 31123            # Start with HTTP/SSE transport
 
-# Five MCP tools: rag_search, rag_list_collections, rag_collection_info, rag_index, rag_prune
+# Six MCP tools: rag_search, rag_neighbors, rag_list_collections, rag_collection_info,
+#   rag_index, rag_prune
 # rag_search with metadata_filter: {"source": "jira"} filters by frontmatter fields
 # rag_search also accepts a "path" param: a case-insensitive substring of the
 # source path to scope results to a subfolder or repo (e.g. "backend/services")
 # rag_search's "collection" param takes a name OR a type ('system', 'project', 'code')
+# rag_search results carry "source_id", which rag_neighbors takes -- so an agent can
+#   search, then follow a result outwards through the relation graph
+# rag_neighbors(source_id, rel?, origin?, hops?, hub_cap?, limit?) returns titles, paths
+#   and one-line snippets, never full content
 # Collections in search_defaults.exclude_collections are skipped when "collection"
 # is omitted; naming one explicitly still searches it
 ```
