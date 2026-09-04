@@ -7,17 +7,20 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/sebastianhutter/local-rag-go/internal/config"
 	"github.com/sebastianhutter/local-rag-go/internal/db"
 	"github.com/sebastianhutter/local-rag-go/internal/embeddings"
+	"github.com/sebastianhutter/local-rag-go/internal/graph"
 	"github.com/sebastianhutter/local-rag-go/internal/indexer"
 )
 
 var forceIndex bool
 var noPrune bool
+var noGraph bool
 
 // sortedKeys returns the keys of a collection map in deterministic (sorted)
 // order, so `index code`/`index all` process collections predictably rather
@@ -388,6 +391,16 @@ var indexAllCmd = &cobra.Command{
 func init() {
 	indexCmd.PersistentFlags().BoolVar(&forceIndex, "force", false, "Force re-index all content")
 	indexCmd.PersistentFlags().BoolVar(&noPrune, "no-prune", false, "Skip automatic pruning of stale sources before indexing")
+	indexCmd.PersistentFlags().BoolVar(&noGraph, "no-graph", false, "Skip rebuilding the relation graph after indexing")
+
+	// One hook covers every index subcommand: the graph is derived from what
+	// indexing just wrote, so leaving it stale is the failure mode nobody
+	// notices -- a traversal keeps working and quietly points at sources that
+	// have moved or gone.
+	indexCmd.PersistentPostRunE = func(cmd *cobra.Command, args []string) error {
+		autoRebuildGraph()
+		return nil
+	}
 
 	indexObsidianCmd.Flags().StringArrayVarP(&obsidianVaults, "vault", "V", nil, "Vault path(s)")
 	indexCalibreCmd.Flags().StringArrayVarP(&calibreLibraries, "library", "l", nil, "Library path(s)")
@@ -449,6 +462,30 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen]
+}
+
+// autoRebuildGraph refreshes the relation graph after an index run. Failure is
+// reported but not fatal: the indexing itself succeeded, and a stale graph is
+// worth less than a command that reports failure for work that was done.
+func autoRebuildGraph() {
+	if noGraph {
+		return
+	}
+	cfg, conn, err := openConfigAndDB()
+	if err != nil {
+		slog.Warn("skipping graph rebuild", "err", err)
+		return
+	}
+	defer conn.Close()
+
+	stats, err := graph.Rebuild(conn, graph.RebuildOptions{
+		MentionExcludeSenders: cfg.Graph.MentionExcludeSenders,
+	})
+	if err != nil {
+		slog.Warn("graph rebuild failed; the stored graph is unchanged", "err", err)
+		return
+	}
+	fmt.Printf("Graph: %d edges in %s\n", stats.Total(), stats.Elapsed.Round(time.Millisecond))
 }
 
 func autoPrune(conn *sql.DB, cfg *config.Config, collectionName string) {

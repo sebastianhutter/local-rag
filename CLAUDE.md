@@ -26,9 +26,9 @@ local-rag index obsidian
 local-rag index email
 local-rag index calibre
 local-rag index rss
-local-rag index code rustyquill
+local-rag index code acme-tools
 local-rag index code                    # all groups
-local-rag index code rustyquill --history  # code + commit history
+local-rag index code acme-tools --history  # code + commit history
 local-rag index project                  # all projects
 local-rag index project "Project Alpha"  # specific project
 
@@ -94,7 +94,7 @@ Vector search is two-stage for speed: a fast Hamming-distance KNN over binary-qu
 
 **Incremental indexing**: Track file hashes, modification times, and watermarks. Only re-embed changed or new content. Use `--force` to re-index everything.
 
-**Relation graph**: `graph_edges` records parsed relations between indexed *sources* — Confluence page hierarchy, frontmatter properties, wikilinks and ticket-key mentions — so a search result can be expanded into what it is connected to rather than only what resembles it. Endpoints are sources, not documents: a relation belongs to the file, and `sources.id` survives a re-embed while a document id does not. Every edge carries a `rel` (what it means) and an `origin` (where it came from), and origins are rebuilt independently. Nothing calls a model; `local-rag graph rebuild` is a scan, not an indexing run.
+**Relation graph** (see `docs/relation-graph.md`): `graph_edges` records parsed relations between indexed *sources* — Confluence page hierarchy, frontmatter properties, wikilinks and ticket-key mentions — so a search result can be expanded into what it is connected to rather than only what resembles it. Endpoints are sources, not documents: a relation belongs to the file, and `sources.id` survives a re-embed while a document id does not. Every edge carries a `rel` (what it means) and an `origin` (where it came from), and origins are rebuilt independently. Nothing calls a model; `local-rag graph rebuild` is a scan, not an indexing run.
 
 Measured on a real database: 28,491 edges over 18,597 connected sources — 24,077 ticket mentions, 2,417 wikilinks, 1,745 Confluence parents, 252 typed frontmatter relations. Ticket mentions are the only class that crosses corpora (a mail, a commit and a note all reach the same issue) and cost one regex. Replaying 60 queries taken from real usage, **78% gained at least one document that vector + FTS could not reach at six times the normal `top_k`**.
 
@@ -285,6 +285,7 @@ local-rag/
 │   ├── architecture.md              # System architecture overview
 │   ├── emclient-schema.md           # eM Client SQLite schema documentation
 │   ├── hybrid-search-and-rrf.md     # How hybrid search and RRF work
+│   ├── relation-graph.md            # Why the graph exists, the four edge origins, traversal rules
 │   └── ollama-and-embeddings.md     # Ollama setup and embedding models
 ├── internal/
 │   ├── config/                      # Configuration loading and defaults
@@ -317,8 +318,9 @@ local-rag index code [NAME] [--history]          # Index repository collection(s
 local-rag index project [NAME]                    # Index project(s) from config
 local-rag index all                               # Index all configured sources at once
 
-# All index commands support --force to re-index everything, and --no-prune to skip
-# the automatic prune pass that runs for obsidian/code/project/all
+# All index commands support --force to re-index everything, --no-prune to skip the
+# automatic prune pass that runs for obsidian/code/project/all, and --no-graph to skip
+# the relation-graph rebuild that runs after any index
 
 # Pruning
 local-rag prune [COLLECTION] [-y]                 # Drop sources whose originals are gone; omit NAME for all
@@ -335,7 +337,7 @@ local-rag search "query" --from "sender@mail.com" # Filter by email sender
 local-rag search "query" --author "Author Name"   # Filter by book author
 local-rag search "query" --after 2025-01-01       # Filter by date
 local-rag search "query" --meta source=jira       # Filter by metadata field
-local-rag search "query" --meta issue_key=CB-123  # Filter by specific metadata value
+local-rag search "query" --meta issue_key=PROJ-123  # Filter by specific metadata value
 local-rag search "query" --top 20                 # Number of results
 
 # Collection management

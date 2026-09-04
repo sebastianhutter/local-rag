@@ -15,6 +15,7 @@ import (
 
 	"github.com/sebastianhutter/local-rag-go/internal/config"
 	"github.com/sebastianhutter/local-rag-go/internal/db"
+	"github.com/sebastianhutter/local-rag-go/internal/graph"
 	"github.com/sebastianhutter/local-rag-go/internal/indexer"
 	localMCP "github.com/sebastianhutter/local-rag-go/internal/mcp"
 )
@@ -244,6 +245,24 @@ func (s *IndexingService) IndexAll(cfg *config.Config, onComplete func(error)) {
 		s.setLabel(projectName)
 		indexer.IndexProject(conn, cfg, projectName, paths, false, nil)
 	}
+
+	rebuildGraph(conn, cfg, s)
+}
+
+// rebuildGraph refreshes the relation graph after indexing. Failure is logged,
+// not surfaced: indexing succeeded, and the previous graph is left intact.
+func rebuildGraph(conn *sql.DB, cfg *config.Config, s *IndexingService) {
+	if s != nil {
+		s.setLabel("relation graph")
+	}
+	stats, err := graph.Rebuild(conn, graph.RebuildOptions{
+		MentionExcludeSenders: cfg.Graph.MentionExcludeSenders,
+	})
+	if err != nil {
+		slog.Warn("graph rebuild failed; the stored graph is unchanged", "err", err)
+		return
+	}
+	slog.Info("graph rebuilt", "edges", stats.Total(), "elapsed", stats.Elapsed)
 }
 
 // IndexCollection runs a single collection's indexer. Caller should run in a goroutine.
@@ -267,6 +286,12 @@ func (s *IndexingService) IndexCollection(name string, cfg *config.Config, onCom
 		return
 	}
 	defer conn.Close()
+
+	// Deferred rather than called at the end: the switch below returns early
+	// for repository and project collections, and a graph left stale by one of
+	// those paths is exactly the bug this is here to prevent. Registered after
+	// conn.Close so it still runs first.
+	defer rebuildGraph(conn, cfg, s)
 
 	// Auto-prune for obsidian, code, and project collections
 	if name == "obsidian" {
