@@ -1,8 +1,12 @@
 package search
 
 import (
+	"database/sql"
 	"math"
 	"testing"
+
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/sebastianhutter/local-rag-go/internal/config"
 )
 
 func TestEscapeFTSQuery(t *testing.T) {
@@ -111,5 +115,101 @@ func TestFiltersHasFilters(t *testing.T) {
 	emptyMeta := &Filters{MetadataFilters: map[string]string{}}
 	if emptyMeta.hasFilters() {
 		t.Error("filters with empty metadata map should return false")
+	}
+}
+
+func TestApplyExcludeDefaults(t *testing.T) {
+	cfgWith := &config.Config{}
+	cfgWith.SearchDefaults.ExcludeCollections = []string{"claude-sessions"}
+	cfgWithout := &config.Config{}
+
+	t.Run("no config", func(t *testing.T) {
+		in := &Filters{}
+		if got := applyExcludeDefaults(in, nil); got != in {
+			t.Error("nil config should return the filters unchanged")
+		}
+	})
+
+	t.Run("no exclusions configured", func(t *testing.T) {
+		in := &Filters{}
+		if got := applyExcludeDefaults(in, cfgWithout); got != in {
+			t.Error("empty exclusion list should return the filters unchanged")
+		}
+	})
+
+	t.Run("applied when no collection named", func(t *testing.T) {
+		got := applyExcludeDefaults(&Filters{SourceType: "markdown"}, cfgWith)
+		if len(got.ExcludeCollections) != 1 || got.ExcludeCollections[0] != "claude-sessions" {
+			t.Errorf("ExcludeCollections = %v, want [claude-sessions]", got.ExcludeCollections)
+		}
+		if got.SourceType != "markdown" {
+			t.Errorf("other filters lost: SourceType = %q", got.SourceType)
+		}
+	})
+
+	t.Run("nil filters still get the defaults", func(t *testing.T) {
+		got := applyExcludeDefaults(nil, cfgWith)
+		if got == nil || len(got.ExcludeCollections) != 1 {
+			t.Errorf("applyExcludeDefaults(nil) = %#v", got)
+		}
+	})
+
+	// An explicit collection is an explicit request, and a default must not
+	// override it -- otherwise an excluded collection could never be searched.
+	t.Run("explicit collection wins", func(t *testing.T) {
+		in := &Filters{Collection: "claude-sessions"}
+		got := applyExcludeDefaults(in, cfgWith)
+		if len(got.ExcludeCollections) != 0 {
+			t.Errorf("exclusions applied over an explicit collection: %v", got.ExcludeCollections)
+		}
+	})
+
+	t.Run("caller's filters are not mutated", func(t *testing.T) {
+		in := &Filters{}
+		applyExcludeDefaults(in, cfgWith)
+		if len(in.ExcludeCollections) != 0 {
+			t.Errorf("caller's Filters was mutated: %v", in.ExcludeCollections)
+		}
+	})
+}
+
+func TestPassesFiltersExcludeCollections(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+		CREATE TABLE collections (id INTEGER PRIMARY KEY, name TEXT, collection_type TEXT);
+		CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, source_path TEXT);
+		CREATE TABLE documents (id INTEGER PRIMARY KEY, source_id INTEGER, collection_id INTEGER, metadata TEXT);
+		INSERT INTO collections VALUES (1,'obsidian','system'),(2,'claude-sessions','project');
+		INSERT INTO sources VALUES (1,'markdown','/vault/note.md'),(2,'markdown','/vault/session.md');
+		INSERT INTO documents VALUES (10,1,1,NULL),(20,2,2,NULL);
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		docID   int64
+		filters *Filters
+		want    bool
+	}{
+		{"kept when nothing excluded", 20, &Filters{}, true},
+		{"excluded by name", 20, &Filters{ExcludeCollections: []string{"claude-sessions"}}, false},
+		{"other collection unaffected", 10, &Filters{ExcludeCollections: []string{"claude-sessions"}}, true},
+		{"excluded by type", 20, &Filters{ExcludeCollections: []string{"project"}}, false},
+		{"type exclusion spares a different type", 10, &Filters{ExcludeCollections: []string{"project"}}, true},
+		{"unknown name excludes nothing", 20, &Filters{ExcludeCollections: []string{"nope"}}, true},
+		{"explicit collection plus its own exclusion still filters", 20,
+			&Filters{Collection: "claude-sessions", ExcludeCollections: []string{"claude-sessions"}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := passesFilters(db, tt.docID, tt.filters); got != tt.want {
+				t.Errorf("passesFilters(%d) = %v, want %v", tt.docID, got, tt.want)
+			}
+		})
 	}
 }

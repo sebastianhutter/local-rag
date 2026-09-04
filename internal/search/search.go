@@ -29,7 +29,15 @@ type SearchResult struct {
 
 // Filters holds optional filters for search queries.
 type Filters struct {
-	Collection      string
+	Collection string
+
+	// ExcludeCollections drops results from these collections. It applies only
+	// when Collection is empty — naming a collection is always an explicit
+	// request for it, and an explicit request outranks a default. Search()
+	// fills this in from SearchDefaults.ExcludeCollections, so callers do not
+	// have to.
+	ExcludeCollections []string
+
 	SourceType      string
 	Path            string // case-insensitive substring match on the source path
 	DateFrom        string
@@ -45,7 +53,7 @@ func (f *Filters) hasFilters() bool {
 	}
 	return f.Collection != "" || f.SourceType != "" || f.Path != "" || f.Sender != "" ||
 		f.Author != "" || f.DateFrom != "" || f.DateTo != "" ||
-		len(f.MetadataFilters) > 0
+		len(f.MetadataFilters) > 0 || len(f.ExcludeCollections) > 0
 }
 
 type rankedResult struct {
@@ -280,6 +288,16 @@ func passesFilters(db *sql.DB, documentID int64, filters *Filters) bool {
 		}
 	}
 
+	for _, excluded := range filters.ExcludeCollections {
+		if collectionTypes[excluded] {
+			if collectionType == excluded {
+				return false
+			}
+		} else if collectionName == excluded {
+			return false
+		}
+	}
+
 	if filters.SourceType != "" && sourceType != filters.SourceType {
 		return false
 	}
@@ -428,6 +446,8 @@ func fetchResult(db *sql.DB, docID int64, score float64) (*SearchResult, error) 
 
 // Search runs hybrid search combining vector similarity and full-text search.
 func Search(db *sql.DB, queryEmbedding []float32, queryText string, topK int, filters *Filters, cfg *config.Config) ([]SearchResult, error) {
+	filters = applyExcludeDefaults(filters, cfg)
+
 	vecResults, err := vectorSearch(db, queryEmbedding, topK, filters)
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
@@ -462,6 +482,27 @@ func Search(db *sql.DB, queryEmbedding []float32, queryText string, topK int, fi
 	}
 
 	return results, nil
+}
+
+// applyExcludeDefaults returns filters with the configured collection
+// exclusions applied, so every caller — CLI, MCP and GUI — gets them without
+// having to know they exist. A search that names a collection is left alone:
+// asking for a collection by name is explicit, and a default must not override
+// it. The filters value is copied rather than mutated, because the caller owns
+// the one it passed in.
+func applyExcludeDefaults(filters *Filters, cfg *config.Config) *Filters {
+	if cfg == nil || len(cfg.SearchDefaults.ExcludeCollections) == 0 {
+		return filters
+	}
+	var copied Filters
+	if filters != nil {
+		if filters.Collection != "" {
+			return filters
+		}
+		copied = *filters
+	}
+	copied.ExcludeCollections = cfg.SearchDefaults.ExcludeCollections
+	return &copied
 }
 
 // PerformSearch is a high-level convenience wrapper that handles the full

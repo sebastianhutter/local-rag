@@ -518,14 +518,33 @@ func (a *App) buildSearchTab(cfg *config.Config) fyne.CanvasObject {
 		}
 	}
 
+	excludeEntry := widget.NewEntry()
+	excludeEntry.SetText(strings.Join(cfg.SearchDefaults.ExcludeCollections, ", "))
+	excludeEntry.SetPlaceHolder("claude-sessions, logs")
+	excludeEntry.OnChanged = func(s string) {
+		var names []string
+		for _, name := range strings.Split(s, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				names = append(names, name)
+			}
+		}
+		cfg.SearchDefaults.ExcludeCollections = names
+	}
+
 	form := widget.NewForm(
 		widget.NewFormItem("Top K results", topKEntry),
 		widget.NewFormItem("RRF K parameter", rrfKEntry),
 		widget.NewFormItem("Vector weight", vecEntry),
 		widget.NewFormItem("FTS weight", ftsEntry),
+		widget.NewFormItem("Exclude from default search", excludeEntry),
 	)
 
-	return container.NewVScroll(form)
+	return container.NewVScroll(container.NewVBox(
+		form,
+		widget.NewLabel("Collections listed above are skipped when a search does not name a\n"+
+			"collection. Searching one by name still works — this only keeps a large\n"+
+			"collection from crowding the default sweep. Comma-separated."),
+	))
 }
 
 // ---------------------------------------------------------------------------
