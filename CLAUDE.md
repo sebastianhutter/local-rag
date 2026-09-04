@@ -518,6 +518,7 @@ For **Claude Desktop**, add to `~/Library/Application Support/Claude/claude_desk
 
 ## Key Constraints & Rules
 
+- **This repository is public — no names from the indexed corpus.** Code, tests, doc comments, `docs/` pages and commit messages must not contain customer or project names, real ticket keys, note titles, people, internal hostnames or mail addresses. The temptation is specific to this project: development means measuring against a live personal database, and the obvious example to reach for when writing a comment or a fixture is the one just measured. Translate before writing it down — `PROJ-42`, `acme-tools`, `example.atlassian.net`, a generic note title. Aggregate measurements are welcome and are what makes the documentation useful; the identities behind them are not.
 - **Everything runs locally.** No cloud APIs, no API keys, no data leaves the machine.
 - **Embedding model must be configurable.** Default to `bge-m3` (1024) but support switching to `mxbai-embed-large` (1024d) or others. If the model changes, all existing embeddings must be regenerated (warn the user).
 - **Incremental indexing by default.** Use file hashes (SHA256) for document files, message IDs for email, and watermarks for date-based sources. Provide `--force` flag to re-index everything.
