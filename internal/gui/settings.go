@@ -58,12 +58,13 @@ func (a *App) openSettings() {
 	// Work on a copy of the config so cancel discards changes.
 	cfg := *a.cfg
 
-	// Build all 8 tabs.
+	// Build all 9 tabs.
 	generalTab := a.buildGeneralTab(&cfg, w)
 	sourcesTab := a.buildSourcesTab(&cfg, w)
 	repositoriesTab := a.buildRepositoriesTab(&cfg, w)
 	projectsTab := a.buildProjectsTab(&cfg, w)
 	searchTab := a.buildSearchTab(&cfg)
+	graphTab := a.buildGraphTab(&cfg)
 	ocrTab := a.buildOCRTab(&cfg)
 	mcpTab := a.buildMCPTab(&cfg, w)
 	collectionsTab := a.buildCollectionsTab(&cfg, w)
@@ -74,6 +75,7 @@ func (a *App) openSettings() {
 		container.NewTabItem("Repositories", repositoriesTab),
 		container.NewTabItem("Projects", projectsTab),
 		container.NewTabItem("Search", searchTab),
+		container.NewTabItem("Graph", graphTab),
 		container.NewTabItem("OCR", ocrTab),
 		container.NewTabItem("MCP & Scheduling", mcpTab),
 		container.NewTabItem("Collections", collectionsTab),
@@ -548,7 +550,39 @@ func (a *App) buildSearchTab(cfg *config.Config) fyne.CanvasObject {
 }
 
 // ---------------------------------------------------------------------------
-// Tab 5 — OCR
+// Tab 6 — Graph
+// ---------------------------------------------------------------------------
+
+func (a *App) buildGraphTab(cfg *config.Config) fyne.CanvasObject {
+	sendersEntry := widget.NewMultiLineEntry()
+	sendersEntry.SetText(strings.Join(cfg.Graph.MentionExcludeSenders, "\n"))
+	sendersEntry.SetPlaceHolder("jira@\nnoreply@")
+	sendersEntry.OnChanged = func(s string) {
+		var senders []string
+		for _, line := range strings.Split(s, "\n") {
+			if line = strings.TrimSpace(line); line != "" {
+				senders = append(senders, line)
+			}
+		}
+		cfg.Graph.MentionExcludeSenders = senders
+	}
+
+	return container.NewVScroll(container.NewVBox(
+		widget.NewCard("Ticket mentions", "One sender per line, matched anywhere in the sender field",
+			container.NewVBox(
+				widget.NewLabel("Mail from these senders is ignored when linking documents to the\n"+
+					"tickets they name. Tracker notifications name a ticket without\n"+
+					"referring to it, so the link adds nothing the ticket already holds --\n"+
+					"and because nothing mentions a notification in turn, it looks highly\n"+
+					"specific and crowds out the real references."),
+				sendersEntry,
+			)),
+		widget.NewLabel("Changes take effect on the next 'local-rag graph rebuild'."),
+	))
+}
+
+// ---------------------------------------------------------------------------
+// Tab 7 — OCR
 // ---------------------------------------------------------------------------
 
 func (a *App) buildOCRTab(cfg *config.Config) fyne.CanvasObject {

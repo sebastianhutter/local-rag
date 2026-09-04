@@ -109,7 +109,7 @@ func TestRebuildConfluenceHierarchy(t *testing.T) {
 	// A parent outside the index must be counted, not stored.
 	addSource(t, db, "/sync/confluence/3.md", map[string]any{"page_id": "3", "parent_id": "999"}, "")
 
-	stats, err := Rebuild(db, []string{OriginConfluence})
+	stats, err := Rebuild(db, RebuildOptions{Origins: []string{OriginConfluence}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestRebuildConfluenceNumericPageID(t *testing.T) {
 	parent := addSource(t, db, "/sync/a.md", map[string]any{"page_id": 11}, "")
 	child := addSource(t, db, "/sync/b.md", map[string]any{"page_id": 12, "parent_id": 11}, "")
 
-	if _, err := Rebuild(db, []string{OriginConfluence}); err != nil {
+	if _, err := Rebuild(db, RebuildOptions{Origins: []string{OriginConfluence}}); err != nil {
 		t.Fatal(err)
 	}
 	want := []storedEdge{{Src: child, Dst: parent, Rel: RelChildOf, Origin: OriginConfluence}}
@@ -150,7 +150,7 @@ func TestRebuildFrontmatterRelationsAreTyped(t *testing.T) {
 		"unrelated": "no links here",
 	}, "")
 
-	if _, err := Rebuild(db, []string{OriginFrontmatter}); err != nil {
+	if _, err := Rebuild(db, RebuildOptions{Origins: []string{OriginFrontmatter}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -182,7 +182,7 @@ func TestRebuildWikilinkSkipsFrontmatterTargets(t *testing.T) {
 		"links":   []any{"Declared", "Mentioned"},
 	}, "")
 
-	if _, err := Rebuild(db, []string{OriginFrontmatter, OriginWikilink}); err != nil {
+	if _, err := Rebuild(db, RebuildOptions{Origins: []string{OriginFrontmatter, OriginWikilink}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -210,7 +210,7 @@ func TestRebuildWikilinkResolution(t *testing.T) {
 		},
 	}, "")
 
-	stats, err := Rebuild(db, []string{OriginWikilink})
+	stats, err := Rebuild(db, RebuildOptions{Origins: []string{OriginWikilink}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestRebuildTicketMentionsCrossCorpora(t *testing.T) {
 	note := addSource(t, db, "/vault/Note.md", nil, "Discussed CB-42 with the team")
 	mail := addSource(t, db, "/mail/thread.md", nil, "re: CB-42 and CB-999 (not indexed)")
 
-	stats, err := Rebuild(db, []string{OriginTicket})
+	stats, err := Rebuild(db, RebuildOptions{Origins: []string{OriginTicket}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestRebuildReplacesOnlyRequestedOrigin(t *testing.T) {
 	target := addSource(t, db, "/vault/Target.md", nil, "")
 	addSource(t, db, "/vault/Note.md", map[string]any{"links": []any{"Target"}}, "")
 
-	if _, err := Rebuild(db, nil); err != nil { // nil means every origin
+	if _, err := Rebuild(db, RebuildOptions{}); err != nil { // nil means every origin
 		t.Fatal(err)
 	}
 	before := len(edges(t, db))
@@ -271,7 +271,7 @@ func TestRebuildReplacesOnlyRequestedOrigin(t *testing.T) {
 		t.Fatalf("expected 2 edges after a full rebuild, got %d", before)
 	}
 
-	if _, err := Rebuild(db, []string{OriginWikilink}); err != nil {
+	if _, err := Rebuild(db, RebuildOptions{Origins: []string{OriginWikilink}}); err != nil {
 		t.Fatal(err)
 	}
 	after := edges(t, db)
@@ -304,12 +304,12 @@ func TestRebuildIsIdempotent(t *testing.T) {
 	addSource(t, db, "/vault/Target.md", nil, "")
 	addSource(t, db, "/vault/Note.md", map[string]any{"links": []any{"Target", "Target"}}, "")
 
-	first, err := Rebuild(db, nil)
+	first, err := Rebuild(db, RebuildOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	before := edges(t, db)
-	second, err := Rebuild(db, nil)
+	second, err := Rebuild(db, RebuildOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +326,7 @@ func TestRebuildIsIdempotent(t *testing.T) {
 
 func TestRebuildUnknownOrigin(t *testing.T) {
 	db := setupDB(t)
-	if _, err := Rebuild(db, []string{"invented"}); err == nil {
+	if _, err := Rebuild(db, RebuildOptions{Origins: []string{"invented"}}); err == nil {
 		t.Error("expected an error for an unknown origin")
 	}
 }
@@ -423,4 +423,95 @@ func TestHelpers(t *testing.T) {
 			})
 		}
 	})
+}
+
+// Tracker notification mail names a ticket without referring to it, so an
+// excluded sender must produce no mention edges -- while a human mail from a
+// different sender still does.
+func TestRebuildTicketExcludesSenders(t *testing.T) {
+	db := setupDB(t)
+	issue := addSource(t, db, "/sync/jira/CB-7.md", map[string]any{"issue_key": "CB-7"}, "CB-7 body")
+	human := addSource(t, db, "/mail/human.md",
+		map[string]any{"sender": "Colleague <colleague@example.com>"}, "what about CB-7?")
+	addSource(t, db, "/mail/notification.md",
+		map[string]any{"sender": "Someone (Jira) <jira@example.atlassian.net>"}, "[JIRA] (CB-7) updated")
+
+	stats, err := Rebuild(db, RebuildOptions{
+		Origins:               []string{OriginTicket},
+		MentionExcludeSenders: []string{"jira@"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []storedEdge{{Src: human, Dst: issue, Rel: RelMentions, Origin: OriginTicket}}
+	if got := edges(t, db); !reflect.DeepEqual(got, want) {
+		t.Errorf("edges = %+v\nwant %+v", got, want)
+	}
+	if st := stats.ByOrigin[OriginTicket]; st.Skipped != 1 {
+		t.Errorf("Skipped = %d, want 1", st.Skipped)
+	}
+}
+
+// The match is a case-insensitive substring of the whole sender field, so a
+// display name is enough and casing does not matter.
+func TestRebuildTicketSenderMatchIsCaseInsensitiveSubstring(t *testing.T) {
+	db := setupDB(t)
+	addSource(t, db, "/sync/jira/CB-8.md", map[string]any{"issue_key": "CB-8"}, "CB-8 body")
+	addSource(t, db, "/mail/a.md",
+		map[string]any{"sender": "Bot <NOREPLY@Example.COM>"}, "CB-8 changed")
+
+	stats, err := Rebuild(db, RebuildOptions{
+		Origins:               []string{OriginTicket},
+		MentionExcludeSenders: []string{"noreply@example.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := edges(t, db); len(got) != 0 {
+		t.Errorf("edges = %+v, want none", got)
+	}
+	if st := stats.ByOrigin[OriginTicket]; st.Skipped != 1 {
+		t.Errorf("Skipped = %d, want 1", st.Skipped)
+	}
+}
+
+// An empty or whitespace-only entry must not exclude everything.
+func TestRebuildTicketIgnoresBlankSenderPatterns(t *testing.T) {
+	db := setupDB(t)
+	issue := addSource(t, db, "/sync/jira/CB-9.md", map[string]any{"issue_key": "CB-9"}, "CB-9 body")
+	mail := addSource(t, db, "/mail/a.md",
+		map[string]any{"sender": "Person <person@example.com>"}, "see CB-9")
+
+	if _, err := Rebuild(db, RebuildOptions{
+		Origins:               []string{OriginTicket},
+		MentionExcludeSenders: []string{"", "   "},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []storedEdge{{Src: mail, Dst: issue, Rel: RelMentions, Origin: OriginTicket}}
+	if got := edges(t, db); !reflect.DeepEqual(got, want) {
+		t.Errorf("edges = %+v, want %+v", got, want)
+	}
+}
+
+// The exclusion applies to mentions only: a wikilink from an excluded sender's
+// source is still an edge, because the sender says nothing about a link.
+func TestRebuildSenderExclusionDoesNotAffectOtherOrigins(t *testing.T) {
+	db := setupDB(t)
+	target := addSource(t, db, "/vault/Target.md", nil, "")
+	note := addSource(t, db, "/vault/Note.md", map[string]any{
+		"sender": "Someone (Jira) <jira@example.atlassian.net>",
+		"links":  []any{"Target"},
+	}, "")
+
+	if _, err := Rebuild(db, RebuildOptions{
+		MentionExcludeSenders: []string{"jira@"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []storedEdge{{Src: note, Dst: target, Rel: RelLinksTo, Origin: OriginWikilink}}
+	if got := edges(t, db); !reflect.DeepEqual(got, want) {
+		t.Errorf("edges = %+v, want %+v", got, want)
+	}
 }

@@ -37,6 +37,25 @@ type SearchDefaults struct {
 	ExcludeCollections []string `json:"exclude_collections"`
 }
 
+// GraphConfig holds settings for the relation graph.
+type GraphConfig struct {
+	// MentionExcludeSenders drops ticket-mention edges from mail sent by these
+	// senders, matched as a case-insensitive substring of the sender field
+	// (so "jira@" covers `Someone (Jira) <jira@example.atlassian.net>`).
+	//
+	// Tracker notification mail names a ticket without referring to it: the
+	// mail exists *because* of the ticket, so an edge between them is a
+	// tautology that adds nothing the ticket's own record does not hold. Left
+	// in, such mail also wins the traversal's rarest-first ranking outright,
+	// because each notification is mentioned by nothing and therefore looks
+	// maximally specific. Measured on a real database, 30% of all mention
+	// edges came from two notification senders.
+	//
+	// Empty by default: which senders are machines is a fact about a corpus,
+	// not about the software.
+	MentionExcludeSenders []string `json:"mention_exclude_senders"`
+}
+
 // OCRConfig holds settings for optional tesseract-based OCR fallback on scanned PDFs.
 type OCRConfig struct {
 	Enabled       bool     `json:"enabled"`          // default: false
@@ -78,6 +97,7 @@ type Config struct {
 	GitHistoryInMonths        int                 `json:"git_history_in_months"`
 	GitCommitSubjectBlacklist []string            `json:"git_commit_subject_blacklist"`
 	SearchDefaults            SearchDefaults      `json:"search_defaults"`
+	Graph                     GraphConfig         `json:"graph"`
 	OCR                       OCRConfig           `json:"ocr"`
 	GUI                       GUIConfig           `json:"gui"`
 
@@ -285,6 +305,7 @@ func Save(cfg *Config, path string) error {
 	existing["git_history_in_months"] = cfg.GitHistoryInMonths
 	existing["git_commit_subject_blacklist"] = cfg.GitCommitSubjectBlacklist
 	existing["search_defaults"] = cfg.SearchDefaults
+	existing["graph"] = cfg.Graph
 	existing["ocr"] = cfg.OCR
 	existing["gui"] = cfg.GUI
 
@@ -337,6 +358,9 @@ func defaults() *Config {
 			VectorWeight:       0.7,
 			FTSWeight:          0.3,
 			ExcludeCollections: []string{},
+		},
+		Graph: GraphConfig{
+			MentionExcludeSenders: []string{},
 		},
 		OCR: OCRConfig{
 			Enabled:       false,

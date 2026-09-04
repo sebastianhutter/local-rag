@@ -429,6 +429,9 @@ Config file location: `~/.local-rag/config.json`
     "fts_weight": 0.3,
     "exclude_collections": []
   },
+  "graph": {
+    "mention_exclude_senders": ["jira@", "noreply@"]
+  },
   "ocr": {
     "enabled": false,
     "languages": ["eng"],
@@ -460,6 +463,12 @@ Note that `chunk_size_tokens` counts whitespace-separated **words**, not model t
 It exists because a collection can be large enough to crowd the results without being wrong. Measured on a real database: an archive of Claude session transcripts (`Notes/_Claude Sessions/`) was 261 notes — 11% of Obsidian sources — but 311,014 documents: 91% of the Obsidian collection and 40% of the entire database, at a median 612 chunks per note against 7 for an ordinary note. Across 60 queries replayed from real usage it took **50% of all top-10 result slots**. That alone does not make those results wrong — for a question the transcript actually discussed, it may be the best source — but excluding it from the default sweep roughly doubled what graph-style neighbour expansion could reach (120 → 259 candidate documents), because a transcript chunk occupies a seed slot without connecting to anything. The archive stays searchable with `--collection claude-sessions`; it just stops competing for every query. Editable under **Settings → Search**.
 
 Note that exclusion counts as a filter, so it widens the vector candidate pool and the FTS candidate limit exactly as the other filters do — a collection can be excluded without the result count collapsing.
+
+**`graph.mention_exclude_senders`** (optional, default `[]`): senders whose mail contributes no ticket-mention edges, matched as a case-insensitive substring of the sender field — `"jira@"` covers `Someone (Jira) <jira@example.atlassian.net>` without needing the display name. Editable under **Settings → Graph**; takes effect on the next `graph rebuild`.
+
+Tracker notification mail names a ticket without referring to it: the mail exists *because* of the ticket, so an edge between them is a tautology that adds nothing the ticket's own record holds. Worse, it wins traversal outright — ranking prefers a low-degree neighbour as more specific, and nothing ever mentions a notification, so every notification looks maximally specific. Measured on a real database, **7,323 of 24,077 mention edges (30%) came from two notification senders**, and expanding a ticket returned five machine mails before any human reference.
+
+The exclusion applies to mentions only. A wikilink in a source from an excluded sender is still an edge, because who sent something says nothing about what it links to.
 
 **`skip_cloud_placeholders`** (optional, default `true`): skip files that exist only in the cloud. macOS marks on-demand files from OneDrive, iCloud Drive, Google Drive and Synology Drive with the `SF_DATALESS` flag — the name, size and mtime are local but the data is not. Opening one makes macOS download it from the provider first, so indexing a mostly-online folder is bounded by network speed and materialises the files on disk (a OneDrive shared library can be hundreds of GB). Placeholders are stat-ed but never opened, so a skipped file costs nothing; a per-path warning reports how many were skipped. Set to `false` to download and index them anyway, or mark the folders *Always Keep on This Device* in Finder. Editable under **Settings → General** (*Cloud Storage* card). Pruning is unaffected — a placeholder still exists on disk, so previously indexed content is not removed.
 
