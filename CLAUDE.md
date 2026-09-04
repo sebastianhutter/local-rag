@@ -96,7 +96,9 @@ Vector search is two-stage for speed: a fast Hamming-distance KNN over binary-qu
 
 **Relation graph** (see `docs/relation-graph.md`): `graph_edges` records parsed relations between indexed *sources* — Confluence page hierarchy, frontmatter properties, wikilinks and ticket-key mentions — so a search result can be expanded into what it is connected to rather than only what resembles it. Endpoints are sources, not documents: a relation belongs to the file, and `sources.id` survives a re-embed while a document id does not. Every edge carries a `rel` (what it means) and an `origin` (where it came from), and origins are rebuilt independently. Nothing calls a model; `local-rag graph rebuild` is a scan, not an indexing run.
 
-Measured on a real database: 28,491 edges over 18,597 connected sources — 24,077 ticket mentions, 2,417 wikilinks, 1,745 Confluence parents, 252 typed frontmatter relations. Ticket mentions are the only class that crosses corpora (a mail, a commit and a note all reach the same issue) and cost one regex. Replaying 60 queries taken from real usage, **78% gained at least one document that vector + FTS could not reach at six times the normal `top_k`**.
+Measured on a real database: 23,613 edges over 11,888 connected sources — 14,873 ticket mentions, 4,344 Jira issue parents, 2,395 wikilinks, 1,749 Confluence page parents, 252 typed frontmatter relations. Jira and Confluence hierarchy share `rel = 'child_of'` but keep separate origins, because the two syncs are independent. Ticket mentions are the only class that crosses corpora (a mail, a commit and a note all reach the same issue) and cost one regex. Replaying 60 queries taken from real usage, **78% gained at least one document that vector + FTS could not reach at six times the normal `top_k`**.
+
+A parent is exempt from hub suppression and ranks as though nothing pointed at it: an epic's degree counts its children, which says nothing about how well it answers "what does this belong to", and without the ranking exemption it would sort last and be cut by the per-seed cap.
 
 Expansion cost is bounded by the *degree* of the nodes it starts from, not by the number of nodes, so a hub cap is not a refinement but a precondition: uncapped, expansion returned 24 documents per query instead of 3. The highest-degree sources here are a document enumerating 570 ticket keys and the vault's folder-index notes.
 
@@ -221,7 +223,7 @@ CREATE VIRTUAL TABLE documents_fts USING fts5(
 -- rel = what the relation means ('links_to', 'child_of', 'mentions', or a
 -- frontmatter property name such as 'related' or 'parent').
 -- origin = where it came from ('wikilink', 'frontmatter', 'confluence',
--- 'ticket-regex'), so one class can be rebuilt or discarded alone.
+-- 'jira', 'ticket-regex'), so one class can be rebuilt or discarded alone.
 CREATE TABLE graph_edges (
     src_source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
     dst_source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,

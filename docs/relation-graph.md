@@ -112,7 +112,25 @@ A synced Confluence page carries `page_id` and `parent_id` in its metadata. Both
 ends are integers written by the sync tool, so nothing is resolved by name and
 nothing is ambiguous. The most reliable edge available.
 
-*1,745 edges.*
+*1,749 edges.*
+
+Roughly a third of pages that declare a parent point at one that was never
+exported. Those are Confluence **folders** — a content type the pages endpoint
+does not return — rather than a resolution failure at this end.
+
+### `jira` — issue hierarchy
+
+An issue's `parent_key` links a story to its epic, or a sub-task to its story.
+Separate from `confluence` because `origin` says where an edge came from and the
+two syncs are independent: a Jira re-sync rebuilds these without touching the
+wiki tree. The relation is `child_of` for both, because `rel` says what an edge
+*means* and a caller asking "what does this belong to" wants either.
+
+Resolution is near-total — 60% of issues declare a parent and 99.7% of those
+parents are indexed — which makes this the cleanest origin available after
+`confluence`.
+
+*4,344 edges, 13 unresolved.*
 
 ### `frontmatter` — typed relations a human wrote
 
@@ -267,6 +285,12 @@ By default such a node is not returned either: a source with hundreds of edges i
 a table of contents, not an answer. `IncludeHubs` restores it for a caller that
 wants one.
 
+**A parent is exempt.** An epic with forty stories has a degree of forty, but
+"what does this belong to" is precisely the question worth answering, and the
+answer is a single node rather than a fan-out. So a `child_of` neighbour is
+returned whatever its degree, while expansion still refuses to travel *through*
+it — which is what would drag in the forty siblings.
+
 The highest-degree nodes in a real database are a document enumerating 570
 tickets, a Confluence draft with 568, and a folder-index note with 482.
 
@@ -275,6 +299,11 @@ tickets, a Confluence draft with 568, and a folder-index note with 482.
 Degree stands in for **specificity**. A source that two things point at says far
 more than one four hundred things mention. Without that ordering, a traversal
 surfaces the corpus's most generic documents first.
+
+That reasoning inverts for a parent, whose degree merely counts its children, so
+a `child_of` neighbour ranks as though nothing pointed at it. Without that it
+would sort to the back and be cut by the per-seed cap — the exemption above
+would be undone by the ranking.
 
 ### 3. Bound what any one seed contributes
 

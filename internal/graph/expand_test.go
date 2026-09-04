@@ -376,3 +376,75 @@ func TestExpandPerSeedLimit(t *testing.T) {
 		t.Error("the modest seed's neighbour was crowded out by the prolific one")
 	}
 }
+
+// The rule that makes hierarchy usable: an epic with more children than the
+// hub cap is still returned as its story's parent. "What does this belong to"
+// is the question, and the answer is one node, not a fan-out.
+func TestExpandReturnsParentEvenWhenItIsAHub(t *testing.T) {
+	db, coll := setupExpandDB(t)
+	epic := addNode(t, db, coll, "Epic", "e")
+	story := addNode(t, db, coll, "Story", "s")
+	addEdge(t, db, story, epic, RelChildOf, OriginJira)
+	// Give the epic many other children, taking it past the cap.
+	for i := 0; i < 12; i++ {
+		sibling := addNode(t, db, coll, fmt.Sprintf("Sibling%d", i), "x")
+		addEdge(t, db, sibling, epic, RelChildOf, OriginJira)
+	}
+
+	got, err := Expand(db, []int64{story}, ExpandOptions{HubCap: 5, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].SourceID != epic {
+		t.Fatalf("got %v, want just the epic %d", ids(got), epic)
+	}
+
+	// Two hops must still not travel through it and drag in the siblings.
+	got, err = Expand(db, []int64{story}, ExpandOptions{Hops: 2, HubCap: 5, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Errorf("got %d neighbours at two hops (%v), want 1 -- the hub is not a route",
+			len(got), ids(got))
+	}
+}
+
+// A parent must also survive the per-seed cap. Ranking by ascending degree
+// would otherwise sort a high-degree epic last and cut it.
+func TestExpandRanksParentAheadOfMentions(t *testing.T) {
+	db, coll := setupExpandDB(t)
+	story := addNode(t, db, coll, "Story", "s")
+	epic := addNode(t, db, coll, "Epic", "e")
+	addEdge(t, db, story, epic, RelChildOf, OriginJira)
+	for i := 0; i < 8; i++ {
+		sibling := addNode(t, db, coll, fmt.Sprintf("Sibling%d", i), "x")
+		addEdge(t, db, sibling, epic, RelChildOf, OriginJira)
+	}
+	// Several low-degree mentions that would otherwise fill the allowance.
+	for i := 0; i < 4; i++ {
+		mention := addNode(t, db, coll, fmt.Sprintf("Mail%d", i), "m")
+		addEdge(t, db, mention, story, RelMentions, OriginTicket)
+	}
+
+	got, err := Expand(db, []int64{story}, ExpandOptions{HubCap: 50, PerSeedLimit: 2, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d neighbours (%v), want 2", len(got), ids(got))
+	}
+	if got[0].SourceID != epic {
+		t.Errorf("first neighbour is %d (rel %s, degree %d), want the parent %d",
+			got[0].SourceID, got[0].Rel, got[0].Degree, epic)
+	}
+}
+
+func TestEffectiveDegree(t *testing.T) {
+	if got := effectiveDegree(RelChildOf, 400); got != 0 {
+		t.Errorf("a parent ranks at %d, want 0 regardless of its children", got)
+	}
+	if got := effectiveDegree(RelMentions, 7); got != 7 {
+		t.Errorf("effectiveDegree(mentions, 7) = %d, want 7", got)
+	}
+}

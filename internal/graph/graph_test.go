@@ -601,3 +601,91 @@ func TestResolveTargetStripsTrailingAnchor(t *testing.T) {
 		t.Errorf("edges = %+v, want %+v", got, want)
 	}
 }
+
+// A story belongs to an epic, a sub-task to a story. The relation is child_of,
+// the same as a wiki parent, because that is what the edge means.
+func TestRebuildJiraHierarchy(t *testing.T) {
+	db := setupDB(t)
+	epic := addSource(t, db, "/sync/jira/PROJ-1.md",
+		map[string]any{"issue_key": "PROJ-1", "issue_type": "Epic"}, "")
+	story := addSource(t, db, "/sync/jira/PROJ-2.md",
+		map[string]any{"issue_key": "PROJ-2", "parent_key": "PROJ-1"}, "")
+	subtask := addSource(t, db, "/sync/jira/PROJ-3.md",
+		map[string]any{"issue_key": "PROJ-3", "parent_key": "PROJ-2"}, "")
+	// A parent outside what was synced is counted, not stored.
+	addSource(t, db, "/sync/jira/PROJ-4.md",
+		map[string]any{"issue_key": "PROJ-4", "parent_key": "OTHER-99"}, "")
+
+	stats, err := Rebuild(db, RebuildOptions{Origins: []string{OriginJira}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []storedEdge{
+		{Src: story, Dst: epic, Rel: RelChildOf, Origin: OriginJira},
+		{Src: subtask, Dst: story, Rel: RelChildOf, Origin: OriginJira},
+	}
+	sort.Slice(want, func(i, j int) bool { return want[i].Src < want[j].Src })
+	if got := edges(t, db); !reflect.DeepEqual(got, want) {
+		t.Errorf("edges = %+v\nwant %+v", got, want)
+	}
+	if st := stats.ByOrigin[OriginJira]; st.Unresolved != 1 {
+		t.Errorf("Unresolved = %d, want 1", st.Unresolved)
+	}
+}
+
+// A parent key written in another case must still resolve.
+func TestRebuildJiraParentKeyCaseInsensitive(t *testing.T) {
+	db := setupDB(t)
+	epic := addSource(t, db, "/sync/jira/PROJ-1.md", map[string]any{"issue_key": "PROJ-1"}, "")
+	story := addSource(t, db, "/sync/jira/PROJ-2.md",
+		map[string]any{"issue_key": "PROJ-2", "parent_key": "proj-1"}, "")
+
+	if _, err := Rebuild(db, RebuildOptions{Origins: []string{OriginJira}}); err != nil {
+		t.Fatal(err)
+	}
+	want := []storedEdge{{Src: story, Dst: epic, Rel: RelChildOf, Origin: OriginJira}}
+	if got := edges(t, db); !reflect.DeepEqual(got, want) {
+		t.Errorf("edges = %+v, want %+v", got, want)
+	}
+}
+
+// Jira and Confluence hierarchies are rebuilt independently, so a Jira re-sync
+// must not disturb the wiki tree.
+func TestRebuildJiraAndConfluenceAreIndependent(t *testing.T) {
+	db := setupDB(t)
+	page := addSource(t, db, "/sync/confluence/1.md", map[string]any{"page_id": "1"}, "")
+	addSource(t, db, "/sync/confluence/2.md", map[string]any{"page_id": "2", "parent_id": "1"}, "")
+	addSource(t, db, "/sync/jira/PROJ-1.md", map[string]any{"issue_key": "PROJ-1"}, "")
+	addSource(t, db, "/sync/jira/PROJ-2.md",
+		map[string]any{"issue_key": "PROJ-2", "parent_key": "PROJ-1"}, "")
+
+	if _, err := Rebuild(db, RebuildOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(edges(t, db)); got != 2 {
+		t.Fatalf("got %d edges after a full rebuild, want 2", got)
+	}
+
+	if _, err := Rebuild(db, RebuildOptions{Origins: []string{OriginJira}}); err != nil {
+		t.Fatal(err)
+	}
+	after := edges(t, db)
+	if len(after) != 2 {
+		t.Errorf("rebuilding jira changed the edge count: %+v", after)
+	}
+	var origins []string
+	for _, e := range after {
+		origins = append(origins, e.Origin)
+	}
+	sort.Strings(origins)
+	if !reflect.DeepEqual(origins, []string{OriginConfluence, OriginJira}) {
+		t.Errorf("origins = %v, want both to survive", origins)
+	}
+	// The wiki edge must still point at the page, not have been re-derived.
+	for _, e := range after {
+		if e.Origin == OriginConfluence && e.Dst != page {
+			t.Errorf("confluence edge points at %d, want %d", e.Dst, page)
+		}
+	}
+}

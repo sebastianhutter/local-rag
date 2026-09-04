@@ -64,6 +64,8 @@ type ExpandOptions struct {
 	// answer to "what is this connected to". Ranking already puts them last,
 	// but that is not enough when a seed has few neighbours and the hub makes
 	// the cut anyway.
+	//
+	// A parent is exempt regardless -- see effectiveDegree.
 	IncludeHubs bool
 
 	// KeepDuplicateTitles disables the collapsing of neighbours that share a
@@ -142,7 +144,8 @@ func Expand(conn *sql.DB, seeds []int64, opts ExpandOptions) ([]Neighbour, error
 		// per-seed cap is applied, so a seed spends its allowance on its
 		// rarest neighbours rather than its lowest row ids.
 		sort.SliceStable(edges, func(i, j int) bool {
-			di, dj := degrees[edges[i].dst], degrees[edges[j].dst]
+			di := effectiveDegree(edges[i].rel, degrees[edges[i].dst])
+			dj := effectiveDegree(edges[j].rel, degrees[edges[j].dst])
 			if di != dj {
 				return di < dj
 			}
@@ -155,7 +158,12 @@ func Expand(conn *sql.DB, seeds []int64, opts ExpandOptions) ([]Neighbour, error
 			if seen[e.dst] {
 				continue
 			}
-			if !opts.IncludeHubs && degrees[e.dst] > opts.HubCap {
+			// The hub filter does not apply to a parent. An epic with forty
+			// stories has a degree of forty, but "what does this belong to"
+			// is precisely the question worth answering, and the answer is
+			// one node rather than a fan-out. Expansion still refuses to
+			// travel *through* it, which is what would drag in the siblings.
+			if !opts.IncludeHubs && e.rel != RelChildOf && degrees[e.dst] > opts.HubCap {
 				continue
 			}
 			if perSeed[e.src] >= opts.PerSeedLimit {
@@ -180,8 +188,10 @@ func Expand(conn *sql.DB, seeds []int64, opts ExpandOptions) ([]Neighbour, error
 		if found[i].Hops != found[j].Hops {
 			return found[i].Hops < found[j].Hops
 		}
-		if found[i].Degree != found[j].Degree {
-			return found[i].Degree < found[j].Degree
+		di := effectiveDegree(found[i].Rel, found[i].Degree)
+		dj := effectiveDegree(found[j].Rel, found[j].Degree)
+		if di != dj {
+			return di < dj
 		}
 		return found[i].SourceID < found[j].SourceID
 	})
@@ -199,6 +209,20 @@ func Expand(conn *sql.DB, seeds []int64, opts ExpandOptions) ([]Neighbour, error
 		described = described[:opts.Limit]
 	}
 	return described, nil
+}
+
+// effectiveDegree is the degree a neighbour is ranked by. Degree normally
+// stands in for specificity -- a source two things point at says more than one
+// four hundred things mention -- but for a parent that reasoning inverts: an
+// epic's degree counts its children, which says nothing about how well it
+// answers "what does this document belong to". A parent therefore ranks as
+// though nothing else pointed at it, which also keeps it inside PerSeedLimit
+// instead of being sorted to the back and cut.
+func effectiveDegree(rel string, degree int) int {
+	if rel == RelChildOf {
+		return 0
+	}
+	return degree
 }
 
 // loadDegrees reads the undirected degree of every node that has an edge. The

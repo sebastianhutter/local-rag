@@ -232,13 +232,13 @@ local-rag neighbors SOURCE               What a source is connected to (id or pa
 `neighbors` accepts `--rel`, `--origin`, `--hops` (1 or 2), `--hub-cap` and `--top`.
 
 The graph records relations parsed from the content — Obsidian wikilinks and frontmatter
-properties, Confluence page hierarchy, and mentions of a ticket key across mail, notes and
-commits. It exists to close a gap search cannot: a note that never uses your query's wording
+properties, Confluence page hierarchy, Jira issue hierarchy, and mentions of a ticket key
+across mail, notes and commits. It exists to close a gap search cannot: a note that never uses your query's wording
 but links to one that does is unreachable at any `top_k`, and one hop away here. Replaying 60
 real queries, 78% gained at least one document that was unreachable at `top_k` 60.
 
 Nothing calls a model — a rebuild is a scan of data already in the database, about 20 seconds
-for ~19,000 edges — and it runs automatically after each index. Agents use it through the
+for ~24,000 edges — and it runs automatically after each index. Agents use it through the
 `rag_neighbors` MCP tool.
 
 See [docs/relation-graph.md](docs/relation-graph.md) for the design, the measurements, and why
