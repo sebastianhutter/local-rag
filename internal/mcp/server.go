@@ -179,7 +179,9 @@ var ragNeighborsTool = mcp.NewTool("rag_neighbors",
 	mcp.WithNumber("hub_cap",
 		mcp.Description("Do not expand through a source with more edges than this (default 25). "+
 			"A hub is a fine destination and a poor route: a ticket 400 documents mention says "+
-			"nothing about which of them belong together. Raise it to expand through one anyway.")),
+			"nothing about which of them belong together. It does not apply to the source you "+
+			"asked about -- naming one is asking about it, however many edges it has -- only to "+
+			"nodes reached along the way, so raising it is rarely needed.")),
 	mcp.WithNumber("limit",
 		mcp.Description("Maximum neighbours to return (default 20). Each costs about 120 tokens.")),
 )
