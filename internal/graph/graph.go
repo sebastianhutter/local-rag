@@ -22,9 +22,10 @@ import (
 // Relation kinds. rel answers "what does this edge mean", which is what a
 // caller filters on when it wants parents but not passing mentions.
 const (
-	RelLinksTo  = "links_to"
-	RelChildOf  = "child_of"
-	RelMentions = "mentions"
+	RelLinksTo   = "links_to"
+	RelChildOf   = "child_of"
+	RelMentions  = "mentions"
+	RelDependsOn = "depends_on"
 )
 
 // Edge origins. origin answers "where did this edge come from", recorded per
@@ -37,11 +38,15 @@ const (
 	OriginFrontmatter = "frontmatter"
 	OriginWikilink    = "wikilink"
 	OriginTicket      = "ticket-regex"
+	OriginTerraform   = "terraform"
 )
 
 // AllOrigins is the set Rebuild derives when no subset is requested, ordered
 // cheapest and most certain first.
-var AllOrigins = []string{OriginConfluence, OriginJira, OriginFrontmatter, OriginWikilink, OriginTicket}
+var AllOrigins = []string{
+	OriginConfluence, OriginJira, OriginFrontmatter,
+	OriginWikilink, OriginTerraform, OriginTicket,
+}
 
 // OriginStats reports what one origin produced.
 type OriginStats struct {
@@ -56,6 +61,12 @@ type OriginStats struct {
 type RebuildOptions struct {
 	// Origins limits the rebuild. Empty means AllOrigins.
 	Origins []string
+
+	// TerraformRegistryPaths maps a module-registry prefix to the paths its
+	// modules occupy in a checkout, tried in order. Without an entry, a
+	// registry-style module address is unresolvable: it shares only the module
+	// name with the checkout, and names collide too heavily to guess from.
+	TerraformRegistryPaths map[string][]string
 
 	// MentionExcludeSenders suppresses ticket mentions from mail whose sender
 	// contains one of these, matched case-insensitively. Tracker notification
@@ -115,6 +126,12 @@ func Rebuild(conn *sql.DB, opts RebuildOptions) (*Stats, error) {
 			edges, st = idx.frontmatterEdges()
 		case OriginWikilink:
 			edges, st = idx.wikilinkEdges()
+		case OriginTerraform:
+			tf, tfErr := loadTerraform(conn)
+			if tfErr != nil {
+				return nil, fmt.Errorf("derive %s edges: %w", origin, tfErr)
+			}
+			edges, st = tf.edges(opts.TerraformRegistryPaths)
 		case OriginTicket:
 			edges, st, err = idx.ticketEdges(conn, opts.MentionExcludeSenders)
 			if err != nil {

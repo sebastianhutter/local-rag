@@ -20,14 +20,21 @@ func setupDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 	if _, err := db.Exec(`
+		CREATE TABLE collections (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT,
+			collection_type TEXT
+		);
 		CREATE TABLE sources (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			collection_id INTEGER,
 			source_type TEXT NOT NULL,
 			source_path TEXT NOT NULL
 		);
 		CREATE TABLE documents (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			source_id INTEGER NOT NULL,
+			collection_id INTEGER,
 			chunk_index INTEGER NOT NULL,
 			content TEXT NOT NULL DEFAULT '',
 			metadata TEXT
