@@ -42,9 +42,9 @@ func mustGetOrCreate(t *testing.T, conn *sql.DB, name, collType string) int64 {
 func TestGetOrCreateRejectsTypeConflict(t *testing.T) {
 	conn := setupTestDB(t)
 
-	codeID := mustGetOrCreate(t, conn, "rustyquill", "code")
+	codeID := mustGetOrCreate(t, conn, "acme-tools", "code")
 
-	projectID, err := getOrCreate(conn, "rustyquill", "project")
+	projectID, err := getOrCreate(conn, "acme-tools", "project")
 	if err == nil {
 		t.Fatal("indexing a project into an existing code collection should fail")
 	}
@@ -63,9 +63,9 @@ func TestGetOrCreateRejectsTypeConflict(t *testing.T) {
 	}
 
 	var rows int
-	conn.QueryRow("SELECT COUNT(*) FROM collections WHERE name = 'rustyquill'").Scan(&rows)
+	conn.QueryRow("SELECT COUNT(*) FROM collections WHERE name = 'acme-tools'").Scan(&rows)
 	if rows != 1 {
-		t.Errorf("got %d rows named rustyquill, want 1", rows)
+		t.Errorf("got %d rows named acme-tools, want 1", rows)
 	}
 }
 

@@ -12,16 +12,16 @@ import (
 // silently merging two corpora — so the conflict has to be reported.
 func TestCollectionNameConflicts(t *testing.T) {
 	cfg := &Config{
-		Repositories: map[string][]string{"rustyquill": {"/repo"}, "copebit": {"/repo2"}},
-		Projects:     map[string][]string{"rustyquill": {"/docs"}, "research": {"/papers"}},
+		Repositories: map[string][]string{"acme-tools": {"/repo"}, "platform": {"/repo2"}},
+		Projects:     map[string][]string{"acme-tools": {"/docs"}, "research": {"/papers"}},
 	}
 
 	conflicts := cfg.CollectionNameConflicts()
 	if len(conflicts) != 1 {
 		t.Fatalf("got %d conflicts, want 1: %v", len(conflicts), conflicts)
 	}
-	if conflicts[0].Name != "rustyquill" {
-		t.Errorf("conflict name = %q, want rustyquill", conflicts[0].Name)
+	if conflicts[0].Name != "acme-tools" {
+		t.Errorf("conflict name = %q, want acme-tools", conflicts[0].Name)
 	}
 	if got := conflicts[0].String(); !strings.Contains(got, "repositories") || !strings.Contains(got, "projects") {
 		t.Errorf("message should name both kinds, got %q", got)
