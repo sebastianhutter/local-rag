@@ -33,6 +33,7 @@ const (
 // LLM-extracted relation have nothing in common in cost or error rate.
 const (
 	OriginConfluence  = "confluence"
+	OriginJira        = "jira"
 	OriginFrontmatter = "frontmatter"
 	OriginWikilink    = "wikilink"
 	OriginTicket      = "ticket-regex"
@@ -40,7 +41,7 @@ const (
 
 // AllOrigins is the set Rebuild derives when no subset is requested, ordered
 // cheapest and most certain first.
-var AllOrigins = []string{OriginConfluence, OriginFrontmatter, OriginWikilink, OriginTicket}
+var AllOrigins = []string{OriginConfluence, OriginJira, OriginFrontmatter, OriginWikilink, OriginTicket}
 
 // OriginStats reports what one origin produced.
 type OriginStats struct {
@@ -108,6 +109,8 @@ func Rebuild(conn *sql.DB, opts RebuildOptions) (*Stats, error) {
 		switch origin {
 		case OriginConfluence:
 			edges, st = idx.confluenceEdges()
+		case OriginJira:
+			edges, st = idx.jiraEdges()
 		case OriginFrontmatter:
 			edges, st = idx.frontmatterEdges()
 		case OriginWikilink:
@@ -348,6 +351,34 @@ func (idx *index) confluenceEdges() ([]edge, OriginStats) {
 			continue
 		}
 		out.add(s.ID, dst, RelChildOf)
+	}
+	return out.slice(), st
+}
+
+// jiraEdges links an issue to its parent -- a story to its epic, a sub-task to
+// its story. Kept separate from confluenceEdges because origin says where an
+// edge came from and the two syncs are independent: a Jira re-sync should be
+// able to rebuild these without touching the wiki hierarchy.
+//
+// The relation is RelChildOf, the same as a wiki parent, because rel says what
+// an edge *means* and a caller asking "what does this belong to" wants both.
+func (idx *index) jiraEdges() ([]edge, OriginStats) {
+	var st OriginStats
+	out := newEdgeSet()
+	for _, s := range idx.sources {
+		parent := strings.ToUpper(metaString(s.Meta, "parent_key"))
+		if parent == "" {
+			continue
+		}
+		dst, ok := idx.byKey[parent]
+		if !ok {
+			// The parent exists in the tracker but is outside what was synced.
+			st.Unresolved++
+			continue
+		}
+		if dst != s.ID {
+			out.add(s.ID, dst, RelChildOf)
+		}
 	}
 	return out.slice(), st
 }
