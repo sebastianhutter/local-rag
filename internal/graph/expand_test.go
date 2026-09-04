@@ -240,21 +240,26 @@ func TestExpandHubCap(t *testing.T) {
 	}
 }
 
-// A seed that is itself a hub contributes nothing, whatever put it in the
-// result set: a document enumerating hundreds of tickets is not a neighbourhood.
-func TestExpandHubSeedIsNotExpanded(t *testing.T) {
+// A hub that arrived among several search results contributes nothing: a
+// document enumerating hundreds of tickets is not a neighbourhood. (A hub the
+// caller named explicitly is a different case -- see
+// TestExpandSingleSeedIgnoresHubCap.)
+func TestExpandIncidentalHubSeedIsNotExpanded(t *testing.T) {
 	db, coll := setupExpandDB(t)
 	hub := addNode(t, db, coll, "Hub", "h")
 	for i := 0; i < 10; i++ {
 		other := addNode(t, db, coll, fmt.Sprintf("Other%d", i), "o")
 		addEdge(t, db, hub, other, RelMentions, OriginTicket)
 	}
-	got, err := Expand(db, []int64{hub}, ExpandOptions{HubCap: 5, Limit: 100})
+	// A second, unrelated seed makes this a search-shaped expansion.
+	quiet := addNode(t, db, coll, "Quiet", "q")
+
+	got, err := Expand(db, []int64{hub, quiet}, ExpandOptions{HubCap: 5, Limit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 0 {
-		t.Errorf("got %v, want nothing expanded from a hub seed", ids(got))
+		t.Errorf("got %v, want nothing expanded from an incidental hub seed", ids(got))
 	}
 }
 
@@ -427,12 +432,15 @@ func TestExpandRanksParentAheadOfMentions(t *testing.T) {
 		addEdge(t, db, mention, story, RelMentions, OriginTicket)
 	}
 
-	got, err := Expand(db, []int64{story}, ExpandOptions{HubCap: 50, PerSeedLimit: 2, Limit: 100})
+	// Two seeds, so the per-seed cap applies: with a single seed it is waived
+	// and this would not test the ranking that keeps a parent inside it.
+	other := addNode(t, db, coll, "Other", "o")
+	got, err := Expand(db, []int64{story, other}, ExpandOptions{HubCap: 50, PerSeedLimit: 2, Limit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("got %d neighbours (%v), want 2", len(got), ids(got))
+		t.Fatalf("got %d neighbours (%v), want 2 -- the story's allowance", len(got), ids(got))
 	}
 	if got[0].SourceID != epic {
 		t.Errorf("first neighbour is %d (rel %s, degree %d), want the parent %d",
@@ -446,5 +454,70 @@ func TestEffectiveDegree(t *testing.T) {
 	}
 	if got := effectiveDegree(RelMentions, 7); got != 7 {
 		t.Errorf("effectiveDegree(mentions, 7) = %d, want 7", got)
+	}
+}
+
+// A caller naming one node is asking about that node, so its degree is beside
+// the point: "what depends on this module" is a question about a module with
+// hundreds of callers, and refusing to expand answers it with silence.
+func TestExpandSingleSeedIgnoresHubCap(t *testing.T) {
+	db, coll := setupExpandDB(t)
+	module := addNode(t, db, coll, "Module", "m")
+	for i := 0; i < 12; i++ {
+		caller := addNode(t, db, coll, fmt.Sprintf("Caller%d", i), "c")
+		addEdge(t, db, caller, module, RelDependsOn, OriginTerraform)
+	}
+
+	got, err := Expand(db, []int64{module}, ExpandOptions{HubCap: 5, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 12 {
+		t.Errorf("got %d neighbours, want all 12 callers of an explicitly named seed", len(got))
+	}
+}
+
+// Several seeds arrived from a search rather than a decision, so one prolific
+// seed among them must not flood the answer.
+func TestExpandMultipleSeedsStillCapped(t *testing.T) {
+	db, coll := setupExpandDB(t)
+	hub := addNode(t, db, coll, "Hub", "h")
+	for i := 0; i < 12; i++ {
+		other := addNode(t, db, coll, fmt.Sprintf("Other%d", i), "o")
+		addEdge(t, db, hub, other, RelMentions, OriginTicket)
+	}
+	modest := addNode(t, db, coll, "Modest", "m")
+	only := addNode(t, db, coll, "Only", "o")
+	addEdge(t, db, modest, only, RelLinksTo, OriginWikilink)
+
+	got, err := Expand(db, []int64{hub, modest}, ExpandOptions{HubCap: 5, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].SourceID != only {
+		t.Errorf("got %v, want only the modest seed's neighbour %d -- the hub must not flood",
+			ids(got), only)
+	}
+}
+
+// The cap still governs later hops even for a single seed: a hub reached in
+// passing is a route to everything and a statement about nothing.
+func TestExpandSingleSeedStillStopsAtHubsLater(t *testing.T) {
+	db, coll := setupExpandDB(t)
+	seed := addNode(t, db, coll, "Seed", "s")
+	hub := addNode(t, db, coll, "Hub", "h")
+	addEdge(t, db, seed, hub, RelMentions, OriginTicket)
+	for i := 0; i < 12; i++ {
+		other := addNode(t, db, coll, fmt.Sprintf("Other%d", i), "o")
+		addEdge(t, db, hub, other, RelMentions, OriginTicket)
+	}
+
+	got, err := Expand(db, []int64{seed},
+		ExpandOptions{Hops: 2, HubCap: 5, Limit: 100, IncludeHubs: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].SourceID != hub {
+		t.Errorf("got %v, want just the hub -- hop 2 must not pass through it", ids(got))
 	}
 }

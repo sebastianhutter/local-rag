@@ -339,6 +339,19 @@ answer is a single node rather than a fan-out. So a `child_of` neighbour is
 returned whatever its degree, while expansion still refuses to travel *through*
 it — which is what would drag in the forty siblings.
 
+**A single seed is exempt too**, and this one was learned the hard way. A caller
+naming one node is asking about that node: "what depends on this Terraform
+module" is a question *about* a high-degree node — the module with 280 callers is
+the interesting one — and capping it answers with silence. The first real use of
+the terraform origin returned nothing for exactly that reason.
+
+So when there is one seed, neither the hub cap nor the per-seed limit applies to
+it; `Limit` alone bounds the answer. Several seeds arrived from a search rather
+than a decision, and there the caps stand: ten results, one of which enumerates
+570 tickets, must not have that one flood the answer. Later hops are always
+capped, for one seed or many — a hub reached *in passing* is a route to
+everything and a statement about nothing.
+
 The highest-degree nodes in a real database are a document enumerating 570
 tickets, a Confluence draft with 568, and a folder-index note with 482.
 
@@ -357,7 +370,8 @@ would be undone by the ranking.
 
 `PerSeedLimit` (default 5) stops one prolific node monopolising the result: a
 wiki page with thirty children would otherwise contribute thirty
-siblings-by-proxy and bury what every other seed found. Candidates are ordered by
+siblings-by-proxy and bury what every other seed found. It is waived for a
+single seed, where there is nothing to monopolise. Candidates are ordered by
 the destination's degree *before* the cap applies, so a seed spends its allowance
 on its rarest neighbours.
 

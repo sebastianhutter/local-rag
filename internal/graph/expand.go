@@ -48,6 +48,8 @@ type ExpandOptions struct {
 	// documents mention says nothing about which of them belong together, and
 	// following it would return all 439. Nodes above the cap are still
 	// returned when something else reaches them.
+	//
+	// It does not apply to a single seed -- see Expand.
 	HubCap int
 
 	// Limit caps the returned neighbours after ranking.
@@ -57,6 +59,9 @@ type ExpandOptions struct {
 	// 0 meaning DefaultPerSeedLimit. Without it one prolific node monopolises
 	// the result: a wiki page with thirty children contributes thirty
 	// siblings-by-proxy and buries what every other seed found.
+	//
+	// Like HubCap it does not apply to a single seed: there is nothing to
+	// monopolise, and Limit already bounds the answer.
 	PerSeedLimit int
 
 	// IncludeHubs returns neighbours whose own degree exceeds HubCap. Off by
@@ -99,6 +104,10 @@ func (o ExpandOptions) withDefaults() ExpandOptions {
 // Expand walks the stored graph out from the given seed sources and returns
 // what they are connected to, nearest first.
 //
+// A single seed is treated as deliberate: it is expanded whatever its degree,
+// because a caller naming one node is asking about that node. Several seeds are
+// capped as usual, since they arrived from a search rather than a decision.
+//
 // Ranking is by hops, then by ascending degree of the neighbour. Degree stands
 // in for specificity: a source that two things point at is far more telling
 // than one that four hundred things mention, and without that ordering a
@@ -119,6 +128,20 @@ func Expand(conn *sql.DB, seeds []int64, opts ExpandOptions) ([]Neighbour, error
 		seen[id] = true
 	}
 
+	// One seed is a seed the caller chose; several are seeds that arrived from
+	// a search. Only the second kind should be subject to the hub cap.
+	//
+	// "What depends on this Terraform module" is a question *about* a
+	// high-degree node -- the module with 280 callers is the interesting one --
+	// and refusing to expand it answers the question with silence. Whereas a
+	// search returning ten results, one of which happens to enumerate 570
+	// tickets, must not have that one flood the answer.
+	//
+	// The cap still governs every later hop, which is where it does its real
+	// work: a hub reached *in passing* is a route to everything and a
+	// statement about nothing.
+	deliberateSeed := len(seeds) == 1
+
 	var found []Neighbour
 	frontier := seeds
 	for hop := 1; hop <= opts.Hops && len(frontier) > 0; hop++ {
@@ -127,7 +150,7 @@ func Expand(conn *sql.DB, seeds []int64, opts ExpandOptions) ([]Neighbour, error
 		// put it in the result set.
 		var expandable []int64
 		for _, id := range frontier {
-			if degrees[id] <= opts.HubCap {
+			if degrees[id] <= opts.HubCap || (hop == 1 && deliberateSeed) {
 				expandable = append(expandable, id)
 			}
 		}
@@ -166,7 +189,7 @@ func Expand(conn *sql.DB, seeds []int64, opts ExpandOptions) ([]Neighbour, error
 			if !opts.IncludeHubs && e.rel != RelChildOf && degrees[e.dst] > opts.HubCap {
 				continue
 			}
-			if perSeed[e.src] >= opts.PerSeedLimit {
+			if !deliberateSeed && perSeed[e.src] >= opts.PerSeedLimit {
 				continue
 			}
 			perSeed[e.src]++
