@@ -36,20 +36,20 @@ document — related to a good result, unreachable at `top_k` 60.**
 
 The two indexes answer different questions, and the handover is a single row:
 
-```
-question with no starting point
-        │
-        ▼
-   vector + full-text search        ← finds what resembles the query
-        │
-        ▼
-   a few known documents  ────────── the boundary
-        │
-        ▼
-   graph traversal                  ← finds what connects to them
-        │
-        ▼
-   rank, pack, return
+```mermaid
+flowchart TD
+    Q["A question, with no starting point"]
+    S["Vector + full-text search<br/>finds what resembles the query"]
+    B["A few known documents"]
+    G["Graph traversal<br/>finds what connects to them"]
+    R["Rank, pack, return"]
+
+    Q --> S --> B --> G --> R
+
+    B -.- NOTE["the boundary:<br/>above it you have a question,<br/>below it you have identity"]
+
+    classDef note stroke-dasharray: 4 3
+    class NOTE note
 ```
 
 - **Vectors work without a starting point.** That is their whole purpose. A graph
@@ -178,6 +178,73 @@ neighbour as more specific, and nothing ever mentions a notification, so every
 notification looks maximally specific. Before excluding two senders, expanding a
 ticket returned five machine mails and no human reference; **8,812 of 23,639
 candidate mention edges (37%) came from those two senders.**
+
+## The Edges in Action
+
+All four origins at once, on an invented corpus. A search has returned two
+results — a vault note and a wiki page — and the traversal walks out from them:
+
+```mermaid
+flowchart LR
+    subgraph vault["Obsidian vault"]
+        RUN["Deployment Runbook<br/>(seed: matched the query)"]
+        ACC["Account Layout"]
+        STO["Storage Design"]
+        CHK["Rollout Checklist"]
+        IDX["Projects Index<br/>(degree 412: a hub)"]
+    end
+
+    subgraph wiki["Confluence space (project collection)"]
+        NET["Network Topology<br/>(seed: matched the query)"]
+        HAND["Platform Handbook"]
+    end
+
+    subgraph tracker["Jira project (project collection)"]
+        P42["PROJ-42"]
+    end
+
+    subgraph elsewhere["Mail and commit history"]
+        MAIL["Re: rollout window<br/>(hop 2)"]
+        CMT["a1b2c3d tighten deploy role<br/>(hop 2)"]
+    end
+
+    RUN -->|"links_to · wikilink"| ACC
+    RUN -->|"related · frontmatter"| STO
+    CHK -->|"links_to · wikilink"| RUN
+    RUN -->|"mentions · ticket-regex"| P42
+    NET -->|"child_of · confluence"| HAND
+    MAIL -->|"mentions · ticket-regex"| P42
+    CMT -->|"mentions · ticket-regex"| P42
+    RUN -.->|"links_to, but a hub"| IDX
+
+    classDef hub stroke-dasharray: 4 3
+    class IDX hub
+```
+
+Five things in that picture are worth naming, because each is a decision taken
+somewhere in this document:
+
+1. **`Rollout Checklist` is returned even though the seed does not link to it.**
+   It links *to* the seed. Traversal is undirected: "what is this connected to"
+   wants inbound edges as much as outbound ones.
+2. **`Storage Design` arrives as `related`, not as `links_to`.** The relation was
+   written into a named frontmatter property, so the property name survives as
+   the relation and the caller can ask for `related` alone.
+3. **`Network Topology` reaches its parent, not its siblings.** `child_of` is
+   followed like any other edge; the other children of `Platform Handbook` are
+   two hops away, and at `hops: 1` they stay there.
+4. **The mail and the commit are reached at hop 2, through the ticket.** Neither
+   contains a word of the original query, and neither is in the same collection
+   as either seed. This is the one relation that crosses corpora, and it is what
+   a regular expression over an issue key buys.
+5. **`Projects Index` is linked from the seed and is still not returned.** With
+   412 edges it is a table of contents: as a route it would drag in half the
+   vault, and as an answer it says nothing. `hub_cap` stops the traversal there
+   and `IncludeHubs` overrides that for a caller who wants it.
+
+Everything above is one hop from a seed except where marked, and the whole
+result — titles, paths, relations, one-line snippets — costs about a fifth of a
+second search.
 
 ## Traversal: Three Rules That Do All the Work
 
