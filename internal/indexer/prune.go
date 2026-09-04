@@ -87,7 +87,7 @@ func PruneCollection(conn *sql.DB, cfg *config.Config, collectionName string) *P
 func pruneCollectionByType(conn *sql.DB, cfg *config.Config, collectionID int64, name, ctype string) *PruneResult {
 	switch name {
 	case "obsidian":
-		return pruneFileSources(conn, collectionID)
+		return pruneFileSources(conn, collectionID, obsidianExcluder(cfg))
 	case "email":
 		return pruneEmailSources(conn, cfg, collectionID)
 	case "rss":
@@ -97,7 +97,7 @@ func pruneCollectionByType(conn *sql.DB, cfg *config.Config, collectionID int64,
 	default:
 		switch ctype {
 		case "project":
-			return pruneFileSources(conn, collectionID)
+			return pruneFileSources(conn, collectionID, nil)
 		case "code":
 			return pruneCodeSources(conn, cfg, collectionID)
 		default:
@@ -106,9 +106,30 @@ func pruneCollectionByType(conn *sql.DB, cfg *config.Config, collectionID int64,
 	}
 }
 
-// pruneFileSources removes sources whose file paths no longer exist on disk.
-// Skips sources with URI-style paths (calibre://, git://).
-func pruneFileSources(conn *sql.DB, collectionID int64) *PruneResult {
+// obsidianExcluder reports which indexed files the vault walk would no longer
+// visit. Indexing removes what indexing cannot see, and a folder added to
+// obsidian_exclude_folders is exactly that: the file is still on disk, so the
+// existence check keeps it forever while the walk never refreshes it. Returns
+// nil when no vault is configured, so there is nothing to judge against.
+func obsidianExcluder(cfg *config.Config) func(string) bool {
+	if cfg == nil || len(cfg.ObsidianVaults) == 0 {
+		return nil
+	}
+	excludeFolders := make(map[string]bool, len(cfg.ObsidianExcludeFolders))
+	for _, f := range cfg.ObsidianExcludeFolders {
+		excludeFolders[f] = true
+	}
+	vaults := cfg.ObsidianVaults
+	return func(path string) bool {
+		return vaultExcludesPath(path, vaults, excludeFolders)
+	}
+}
+
+// pruneFileSources removes sources whose file paths no longer exist on disk,
+// plus any the excluded predicate rejects — a file that still exists but has
+// moved out of what indexing looks at. Pass nil for excluded when existence is
+// the only criterion. Skips sources with URI-style paths (calibre://, git://).
+func pruneFileSources(conn *sql.DB, collectionID int64, excluded func(string) bool) *PruneResult {
 	result := &PruneResult{}
 
 	sources, err := sourcesForCollection(conn, collectionID)
@@ -118,7 +139,7 @@ func pruneFileSources(conn *sql.DB, collectionID int64) *PruneResult {
 		return result
 	}
 
-	var stale []int64
+	var stale, unreachable []int64
 	for _, s := range sources {
 		// Skip URI-style sources
 		if strings.Contains(s.SourcePath, "://") {
@@ -127,10 +148,18 @@ func pruneFileSources(conn *sql.DB, collectionID int64) *PruneResult {
 		result.Checked++
 		if _, err := os.Stat(s.SourcePath); os.IsNotExist(err) {
 			stale = append(stale, s.ID)
+			continue
+		}
+		if excluded != nil && excluded(s.SourcePath) {
+			unreachable = append(unreachable, s.ID)
 		}
 	}
 
+	// Reported separately: "the file is gone" and "the file is no longer being
+	// looked at" are different events, and a mistyped exclude entry shows up
+	// as a surprising count against the second one.
 	finishPrune(conn, result, stale, "file")
+	finishPrune(conn, result, unreachable, "excluded-folder")
 	return result
 }
 

@@ -31,7 +31,7 @@ func TestPruneFileSources(t *testing.T) {
 		collID, missingFile,
 	)
 
-	result := pruneFileSources(conn, collID)
+	result := pruneFileSources(conn, collID, nil)
 
 	if result.Checked != 2 {
 		t.Errorf("expected 2 checked, got %d", result.Checked)
@@ -111,7 +111,7 @@ func TestPruneSkipsURISources(t *testing.T) {
 		collID, "git:///repo#abc123",
 	)
 
-	result := pruneFileSources(conn, collID)
+	result := pruneFileSources(conn, collID, nil)
 
 	// URI sources should be skipped entirely, not checked
 	if result.Checked != 0 {
@@ -213,5 +213,111 @@ func TestPruneCodeSkipsCommits(t *testing.T) {
 	conn.QueryRow("SELECT COUNT(*) FROM sources WHERE collection_id = ? AND source_path = 'git:///repo#abc123'", collID).Scan(&count)
 	if count != 1 {
 		t.Error("commit source should never be pruned")
+	}
+}
+
+func TestVaultExcludesPath(t *testing.T) {
+	vaults := []string{"/vault"}
+	excl := map[string]bool{"_Inbox": true, "_Claude Sessions": true}
+
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"ordinary note", "/vault/Notes/note.md", false},
+		{"inside an excluded folder", "/vault/_Inbox/note.md", true},
+		{"excluded folder with a space", "/vault/_Claude Sessions/2026-01-01_x.md", true},
+		{"nested under an excluded folder", "/vault/_Inbox/deep/deeper/note.md", true},
+		{"obsidian internals", "/vault/.obsidian/plugins/x.md", true},
+		{"any dot-directory", "/vault/.smart-env/cache.md", true},
+		{"dotfile", "/vault/Notes/.hidden.md", true},
+		// A substring is not a path component: excluding "_Inbox" must not take
+		// out a folder or file that merely contains the word.
+		{"folder name containing an excluded name", "/vault/My _Inbox Archive/note.md", false},
+		{"file name containing an excluded name", "/vault/Notes/_Inbox notes.md", false},
+		// An excluded name above the vault root belongs to somebody else.
+		{"excluded name above the vault root", "/vault/Notes/ok.md", false},
+		// Outside every configured vault we cannot judge, so we leave it alone.
+		{"outside the vault", "/elsewhere/_Inbox/note.md", false},
+		{"the vault root itself", "/vault", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := vaultExcludesPath(tt.path, vaults, excl); got != tt.want {
+				t.Errorf("vaultExcludesPath(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("excluded name above the root does not condemn the vault", func(t *testing.T) {
+		if vaultExcludesPath("/home/_Inbox/vault/Notes/note.md", []string{"/home/_Inbox/vault"}, excl) {
+			t.Error("a path component above the vault root was treated as an exclusion")
+		}
+	})
+}
+
+// A vault-less config must not make everything prunable.
+func TestObsidianExcluderWithoutVaults(t *testing.T) {
+	if got := obsidianExcluder(&config.Config{ObsidianExcludeFolders: []string{"_Inbox"}}); got != nil {
+		t.Error("expected nil predicate when no vault is configured")
+	}
+	if got := obsidianExcluder(nil); got != nil {
+		t.Error("expected nil predicate for a nil config")
+	}
+}
+
+// The end the user actually sees: a file that still exists on disk but now sits
+// in an excluded folder is pruned, and its neighbours are not.
+func TestPruneFileSourcesExcludedFolder(t *testing.T) {
+	conn := setupTestDB(t)
+	collID := mustGetOrCreate(t, conn, "obsidian", "system")
+
+	vault := t.TempDir()
+	keep := filepath.Join(vault, "Notes")
+	drop := filepath.Join(vault, "_Claude Sessions")
+	os.MkdirAll(keep, 0o755)
+	os.MkdirAll(drop, 0o755)
+
+	keptFile := filepath.Join(keep, "real.md")
+	excludedFile := filepath.Join(drop, "session.md")
+	os.WriteFile(keptFile, []byte("# real"), 0o644)
+	os.WriteFile(excludedFile, []byte("# session"), 0o644)
+
+	for _, p := range []string{keptFile, excludedFile} {
+		if _, err := conn.Exec(
+			"INSERT INTO sources (collection_id, source_type, source_path, last_indexed_at) VALUES (?, 'markdown', ?, datetime('now'))",
+			collID, p,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := &config.Config{
+		ObsidianVaults:         []string{vault},
+		ObsidianExcludeFolders: []string{"_Claude Sessions"},
+	}
+	result := pruneFileSources(conn, collID, obsidianExcluder(cfg))
+
+	if result.Checked != 2 {
+		t.Errorf("Checked = %d, want 2", result.Checked)
+	}
+	if result.Pruned != 1 {
+		t.Errorf("Pruned = %d, want 1", result.Pruned)
+	}
+
+	var remaining string
+	if err := conn.QueryRow("SELECT source_path FROM sources WHERE collection_id = ?", collID).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != keptFile {
+		t.Errorf("surviving source = %q, want %q", remaining, keptFile)
+	}
+
+	// Without the predicate the excluded file is untouched -- this is the
+	// pre-existing behaviour that left it stranded.
+	result = pruneFileSources(conn, collID, nil)
+	if result.Pruned != 0 {
+		t.Errorf("Pruned = %d with no predicate, want 0", result.Pruned)
 	}
 }
