@@ -96,12 +96,16 @@ func indexEmailAccount(conn *sql.DB, cfg *config.Config, collectionID int64, acc
 	slog.Info("found emails to process", "count", totalEmails, "account", filepath.Base(accountDir))
 
 	// Pass 1 — decide what needs indexing. Cheap: no chunking, no network.
+	now := nowISO()
 	todo := make([]*parser.EmailMessage, 0, len(emails))
 	for _, email := range emails {
 		result.TotalFound++
 
 		// Advance watermark for all emails we've seen, not just indexed ones.
-		if email.Date > latestDate {
+		// A scheduled message dated in the future is indexed but must not move
+		// the watermark past now, or mail arriving before its send date would
+		// fall below the watermark and never be picked up.
+		if email.Date > latestDate && email.Date <= now {
 			latestDate = email.Date
 		}
 
@@ -168,16 +172,27 @@ func parseEmailsWithRetry(accountDir, sinceDate string) ([]*parser.EmailMessage,
 	return nil, fmt.Errorf("exhausted retries")
 }
 
+// getEmailWatermark returns the newest indexed message date, ignoring dates in
+// the future. A scheduled message is stored with its send date, so without the
+// cut-off one queued mail would push the watermark days ahead and every message
+// arriving before then would be filtered out by ParseEmails and never indexed.
 func getEmailWatermark(conn *sql.DB, collectionID int64) string {
 	var latest sql.NullString
 	conn.QueryRow(
-		"SELECT MAX(json_extract(d.metadata, '$.date')) FROM documents d WHERE d.collection_id = ?",
-		collectionID,
+		"SELECT MAX(json_extract(d.metadata, '$.date')) FROM documents d "+
+			"WHERE d.collection_id = ? AND json_extract(d.metadata, '$.date') <= ?",
+		collectionID, nowISO(),
 	).Scan(&latest)
 	if latest.Valid {
 		return latest.String
 	}
 	return ""
+}
+
+// nowISO renders the current time the way parser.ParseEmails renders a message
+// date (RFC3339, UTC), so the two compare correctly as strings.
+func nowISO() string {
+	return time.Now().UTC().Format(time.RFC3339)
 }
 
 func setEmailWatermark(conn *sql.DB, collectionID int64, date string) {
