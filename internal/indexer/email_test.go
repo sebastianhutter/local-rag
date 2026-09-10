@@ -1,7 +1,9 @@
 package indexer
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/sebastianhutter/local-rag-go/internal/parser"
 )
@@ -63,5 +65,37 @@ func TestEmailToItemSetsSourceType(t *testing.T) {
 
 	if item.SourceType != "email" {
 		t.Errorf("SourceType = %q, want email", item.SourceType)
+	}
+}
+
+// A message scheduled for the future is indexed like any other, but its date
+// must not become the watermark: everything arriving before its send date would
+// then sit below the watermark and never be fetched again.
+func TestEmailWatermarkIgnoresFutureDates(t *testing.T) {
+	conn := setupTestDB(t)
+	collID := mustGetOrCreate(t, conn, "email", "system")
+
+	past := time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339)
+	future := time.Now().UTC().Add(72 * time.Hour).Format(time.RFC3339)
+
+	for i, date := range []string{past, future} {
+		res, err := conn.Exec(
+			"INSERT INTO sources (collection_id, source_type, source_path) VALUES (?, 'email', ?)",
+			collID, fmt.Sprintf("msg-%d", i),
+		)
+		if err != nil {
+			t.Fatalf("insert source: %v", err)
+		}
+		sourceID, _ := res.LastInsertId()
+		if _, err := conn.Exec(
+			"INSERT INTO documents (source_id, collection_id, chunk_index, title, content, metadata) VALUES (?, ?, 0, 'subject', 'body', ?)",
+			sourceID, collID, fmt.Sprintf(`{"date":%q}`, date),
+		); err != nil {
+			t.Fatalf("insert document: %v", err)
+		}
+	}
+
+	if got := getEmailWatermark(conn, collID); got != past {
+		t.Errorf("watermark = %q, want %q (the newest non-future date)", got, past)
 	}
 }
