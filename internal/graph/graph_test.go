@@ -696,3 +696,110 @@ func TestRebuildJiraAndConfluenceAreIndependent(t *testing.T) {
 		}
 	}
 }
+
+// With two vaults and a tracker export indexed side by side, a name is rarely
+// unique across all of them. A link resolves in its own vault first, however
+// much shallower a namesake elsewhere is -- and a name unique in its own vault
+// is not a guess.
+func TestResolveTargetPrefersLinkingVault(t *testing.T) {
+	db := setupDB(t)
+	addSource(t, db, "/sync/jira/PROJ-142.md", map[string]any{"issue_key": "PROJ-142"}, "")
+	addSource(t, db, "/notes/PROJ-142.md", nil, "")
+	inVault := addSource(t, db, "/work/proj/tasks/proj-142.md", nil, "")
+	entry := addSource(t, db, "/work/proj/log/entry.md",
+		map[string]any{"links": []any{"proj-142"}}, "")
+
+	stats, err := Rebuild(db, RebuildOptions{
+		Origins:    []string{OriginWikilink},
+		VaultRoots: []string{"/notes", "/work/"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []storedEdge{{Src: entry, Dst: inVault, Rel: RelLinksTo, Origin: OriginWikilink}}
+	if got := edges(t, db); !reflect.DeepEqual(got, want) {
+		t.Errorf("edges = %+v, want %+v", got, want)
+	}
+	if st := stats.ByOrigin[OriginWikilink]; st.Ambiguous != 0 {
+		t.Errorf("Ambiguous = %d, want 0 -- the name is unique in its own vault", st.Ambiguous)
+	}
+}
+
+// Nothing in the linking vault by that name: the corpus-wide rule still
+// applies, so a vault note naming a tracker issue keeps reaching the export.
+func TestResolveTargetFallsBackOutsideTheVault(t *testing.T) {
+	db := setupDB(t)
+	issue := addSource(t, db, "/sync/jira/PROJ-7.md", map[string]any{"issue_key": "PROJ-7"}, "")
+	note := addSource(t, db, "/notes/Meeting.md", map[string]any{"links": []any{"PROJ-7"}}, "")
+
+	if _, err := Rebuild(db, RebuildOptions{Origins: []string{OriginWikilink}, VaultRoots: []string{"/notes"}}); err != nil {
+		t.Fatal(err)
+	}
+	want := []storedEdge{{Src: note, Dst: issue, Rel: RelLinksTo, Origin: OriginWikilink}}
+	if got := edges(t, db); !reflect.DeepEqual(got, want) {
+		t.Errorf("edges = %+v, want %+v", got, want)
+	}
+}
+
+// A vault-relative path link that also matches a path in another vault must
+// reach its own vault's file on every rebuild, not whichever map order yields.
+func TestResolveTargetPathLinkStaysInVault(t *testing.T) {
+	for run := 0; run < 20; run++ {
+		db := setupDB(t)
+		addSource(t, db, "/notes/Archive/proj/proj.md", nil, "")
+		own := addSource(t, db, "/work/proj/proj.md", nil, "")
+		task := addSource(t, db, "/work/proj/tasks/proj-142.md",
+			map[string]any{"parent": "[[proj/proj|proj]]"}, "")
+
+		if _, err := Rebuild(db, RebuildOptions{
+			Origins:    []string{OriginFrontmatter},
+			VaultRoots: []string{"/notes", "/work"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		want := []storedEdge{{Src: task, Dst: own, Rel: RelParent, Origin: OriginFrontmatter}}
+		if got := edges(t, db); !reflect.DeepEqual(got, want) {
+			t.Fatalf("run %d: edges = %+v, want %+v", run, got, want)
+		}
+	}
+}
+
+// The same path suffix in two places outside any vault is still resolved the
+// same way every time: shallowest first.
+func TestResolveTargetPathSuffixIsDeterministic(t *testing.T) {
+	for run := 0; run < 20; run++ {
+		db := setupDB(t)
+		addSource(t, db, "/a/deep/er/proj/proj.md", nil, "")
+		shallow := addSource(t, db, "/b/proj/proj.md", nil, "")
+		note := addSource(t, db, "/c/Note.md", map[string]any{"links": []any{"proj/proj"}}, "")
+
+		if _, err := Rebuild(db, RebuildOptions{Origins: []string{OriginWikilink}}); err != nil {
+			t.Fatal(err)
+		}
+		want := []storedEdge{{Src: note, Dst: shallow, Rel: RelLinksTo, Origin: OriginWikilink}}
+		if got := edges(t, db); !reflect.DeepEqual(got, want) {
+			t.Fatalf("run %d: edges = %+v, want %+v", run, got, want)
+		}
+	}
+}
+
+// A note that declares the issue it is about is linked to that issue exactly,
+// by key -- no name matching, so no guess.
+func TestRebuildFrontmatterTracksIssueByKey(t *testing.T) {
+	db := setupDB(t)
+	issue := addSource(t, db, "/sync/jira/PROJ-142.md", map[string]any{"issue_key": "PROJ-142"}, "")
+	task := addSource(t, db, "/work/proj/tasks/proj-142.md", map[string]any{"source_key": "proj-142"}, "")
+	addSource(t, db, "/work/proj/tasks/other.md", map[string]any{"source_key": "NOPE-1"}, "")
+
+	stats, err := Rebuild(db, RebuildOptions{Origins: []string{OriginFrontmatter}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []storedEdge{{Src: task, Dst: issue, Rel: RelTracks, Origin: OriginFrontmatter}}
+	if got := edges(t, db); !reflect.DeepEqual(got, want) {
+		t.Errorf("edges = %+v, want %+v", got, want)
+	}
+	if st := stats.ByOrigin[OriginFrontmatter]; st.Unresolved != 1 {
+		t.Errorf("Unresolved = %d, want 1 (the key nothing indexed holds)", st.Unresolved)
+	}
+}

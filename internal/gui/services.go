@@ -258,6 +258,7 @@ func rebuildGraph(conn *sql.DB, cfg *config.Config, s *IndexingService) {
 	stats, err := graph.Rebuild(conn, graph.RebuildOptions{
 		MentionExcludeSenders:  cfg.Graph.MentionExcludeSenders,
 		TerraformRegistryPaths: cfg.Graph.TerraformRegistryPaths,
+		VaultRoots:             cfg.ObsidianVaults,
 	})
 	if err != nil {
 		slog.Warn("graph rebuild failed; the stored graph is unchanged", "err", err)

@@ -167,8 +167,9 @@ var ragNeighborsTool = mcp.NewTool("rag_neighbors",
 		mcp.Description("The source_id of an indexed file, as returned in rag_search results")),
 	mcp.WithString("rel",
 		mcp.Description("Only follow these relations, comma-separated. Common ones: 'links_to' "+
-			"(a wikilink), 'child_of' (wiki page hierarchy), 'mentions' (a ticket key), plus "+
-			"frontmatter property names such as 'related' or 'parent'. Omit to follow all.")),
+			"(a wikilink), 'child_of' (wiki or issue hierarchy), 'mentions' (a ticket key), "+
+			"'tracks' (the issue a note is about), plus frontmatter property names such as "+
+			"'related' or 'parent'. Omit to follow all.")),
 	mcp.WithString("origin",
 		mcp.Description("Only follow edges derived this way, comma-separated: 'confluence', "+
 			"'frontmatter', 'wikilink', 'ticket-regex'. Omit to follow all.")),

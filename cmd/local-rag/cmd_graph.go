@@ -45,6 +45,7 @@ Origins: ` + strings.Join(graph.AllOrigins, ", "),
 			Origins:                graphOrigins,
 			MentionExcludeSenders:  cfg.Graph.MentionExcludeSenders,
 			TerraformRegistryPaths: cfg.Graph.TerraformRegistryPaths,
+			VaultRoots:             cfg.ObsidianVaults,
 		})
 		if err != nil {
 			return err

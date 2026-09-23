@@ -26,7 +26,23 @@ const (
 	RelChildOf   = "child_of"
 	RelMentions  = "mentions"
 	RelDependsOn = "depends_on"
+
+	// RelParent is the frontmatter property Obsidian vaults use for "this
+	// note belongs to that one". It arrives through the frontmatter origin
+	// like any other property, but traversal treats it as a parent -- see
+	// isParentLike.
+	RelParent = "parent"
+
+	// RelTracks links a note to the tracker issue it declares itself to be
+	// about, through an issue-key property such as `source_key`. A work
+	// note's issue is one node and exactly the thing worth reaching from it.
+	RelTracks = "tracks"
 )
+
+// issueKeyProperties are the frontmatter properties whose value is the key of
+// the issue a note is about. Unlike a link, a key resolves exactly -- through
+// the issue's own `issue_key` -- so reading a bare value here invents nothing.
+var issueKeyProperties = []string{"source_key"}
 
 // Edge origins. origin answers "where did this edge come from", recorded per
 // edge so one class can be rebuilt or discarded without disturbing the others.
@@ -73,6 +89,13 @@ type RebuildOptions struct {
 	// mail names a ticket without referring to it, and left in it wins the
 	// traversal's rarest-first ranking outright.
 	MentionExcludeSenders []string
+
+	// VaultRoots are the Obsidian vault directories. A link written in a vault
+	// resolves to a note in that vault before anything else, as Obsidian
+	// itself would: with two vaults and tracker exports indexed side by side,
+	// a note name is rarely unique across all of them, and the shortest path
+	// across the whole corpus is an arbitrary winner.
+	VaultRoots []string
 }
 
 // Stats reports the outcome of a rebuild.
@@ -105,7 +128,7 @@ func Rebuild(conn *sql.DB, opts RebuildOptions) (*Stats, error) {
 		origins = AllOrigins
 	}
 
-	idx, err := loadIndex(conn)
+	idx, err := loadIndex(conn, opts.VaultRoots)
 	if err != nil {
 		return nil, err
 	}
@@ -170,6 +193,10 @@ type index struct {
 	byBase   map[string][]int64 // lowercased file name without extension
 	byPageID map[string]int64
 	byKey    map[string]int64 // Jira issue key -> the source holding that issue
+	pathByID map[int64]string
+	// vaultRoots are cleaned vault directories with a trailing separator, so
+	// a prefix match cannot confuse /vault with /vault-archive.
+	vaultRoots []string
 	// fmTargets records, per source, the link targets that came from
 	// frontmatter, so the wikilink pass can skip them: the parser merges
 	// frontmatter links into the flat links list, and emitting both would
@@ -181,7 +208,7 @@ type index struct {
 // markdown carries wikilinks, Confluence ids or issue keys, and restricting to
 // it keeps the scan to thousands of rows instead of the hundreds of thousands
 // that email and RSS add.
-func loadIndex(conn *sql.DB) (*index, error) {
+func loadIndex(conn *sql.DB, vaultRoots []string) (*index, error) {
 	rows, err := conn.Query(`
 		SELECT s.id, s.source_path, d.metadata
 		FROM sources s
@@ -198,6 +225,12 @@ func loadIndex(conn *sql.DB) (*index, error) {
 		byPageID:  make(map[string]int64),
 		byKey:     make(map[string]int64),
 		fmTargets: make(map[int64]map[string]bool),
+		pathByID:  make(map[int64]string),
+	}
+	for _, root := range vaultRoots {
+		if root = strings.TrimSpace(root); root != "" {
+			idx.vaultRoots = append(idx.vaultRoots, filepath.Clean(root)+string(filepath.Separator))
+		}
 	}
 	for rows.Next() {
 		var (
@@ -233,25 +266,63 @@ func loadIndex(conn *sql.DB) (*index, error) {
 
 	// Ambiguity is resolved by Obsidian's own rule -- the shortest path wins --
 	// with the source id as a tiebreak so two runs agree. Sorting once here
-	// means resolveName can take the first candidate.
-	pathByID := make(map[int64]string, len(idx.sources))
+	// means resolveTarget can take the first candidate.
 	for _, sm := range idx.sources {
-		pathByID[sm.ID] = sm.Path
+		idx.pathByID[sm.ID] = sm.Path
 	}
 	for _, ids := range idx.byBase {
-		sort.Slice(ids, func(i, j int) bool {
-			pi, pj := pathByID[ids[i]], pathByID[ids[j]]
-			di, dj := strings.Count(pi, string(filepath.Separator)), strings.Count(pj, string(filepath.Separator))
-			if di != dj {
-				return di < dj
-			}
-			if len(pi) != len(pj) {
-				return len(pi) < len(pj)
-			}
-			return ids[i] < ids[j]
-		})
+		idx.sortByDepth(ids)
 	}
 	return idx, nil
+}
+
+// sortByDepth orders candidates shallowest first, then shortest, then by id.
+func (idx *index) sortByDepth(ids []int64) {
+	sort.Slice(ids, func(i, j int) bool {
+		pi, pj := idx.pathByID[ids[i]], idx.pathByID[ids[j]]
+		di, dj := strings.Count(pi, string(filepath.Separator)), strings.Count(pj, string(filepath.Separator))
+		if di != dj {
+			return di < dj
+		}
+		if len(pi) != len(pj) {
+			return len(pi) < len(pj)
+		}
+		return ids[i] < ids[j]
+	})
+}
+
+// vaultOf returns the vault directory holding path, or "" when it is in none.
+func (idx *index) vaultOf(path string) string {
+	for _, root := range idx.vaultRoots {
+		if strings.HasPrefix(path, root) {
+			return root
+		}
+	}
+	return ""
+}
+
+// preferVault picks among candidates sorted by sortByDepth: the first one in
+// the linking note's vault when there is one, otherwise the first overall.
+// Ambiguity is judged within whichever set the choice was made from, so a name
+// unique in its own vault is not reported as a guess because a tracker export
+// elsewhere shares it.
+func (idx *index) preferVault(ids []int64, from string) (int64, resolution) {
+	pool := ids
+	if root := idx.vaultOf(from); root != "" {
+		var local []int64
+		for _, id := range ids {
+			if strings.HasPrefix(idx.pathByID[id], root) {
+				local = append(local, id)
+			}
+		}
+		if len(local) > 0 {
+			pool = local
+		}
+	}
+	if len(pool) == 1 {
+		return pool[0], resolvedExactly
+	}
+	return pool[0], resolvedAmbiguously
 }
 
 // baseKey is the identity a wikilink resolves against: the file name without
@@ -305,10 +376,12 @@ const (
 	notANote     // an attachment, or a heading inside the linking note
 )
 
-// resolveTarget maps a link target to a source. A target carrying a path is
-// matched on the path first, so `[[Processes/Handover]]` reaches that file
-// rather than whichever `Handover.md` sorts first.
-func (idx *index) resolveTarget(target string) (int64, resolution) {
+// resolveTarget maps a link target written in the source at from to a
+// source. A target carrying a path is matched on the path first, so
+// `[[Processes/Handover]]` reaches that file rather than whichever
+// `Handover.md` sorts first. Either way, a match in the linking note's own
+// vault beats one anywhere else.
+func (idx *index) resolveTarget(target, from string) (int64, resolution) {
 	target = strings.TrimSpace(target)
 
 	// `[[#Heading]]` and `[[^block]]` point inside the linking note itself.
@@ -330,25 +403,35 @@ func (idx *index) resolveTarget(target string) (int64, resolution) {
 		if id, ok := idx.byPath[pathKey(target)]; ok {
 			return id, resolvedExactly
 		}
-		// Fall back to a suffix match, since a link is written relative to the
-		// vault while a stored path is absolute.
-		suffix := "/" + pathKey(target)
-		for storedPath, id := range idx.byPath {
-			if strings.HasSuffix(storedPath, suffix) {
+		// A path link is vault-relative, so its own vault is the first place
+		// it can mean.
+		if root := idx.vaultOf(from); root != "" {
+			if id, ok := idx.byPath[pathKey(root+strings.TrimPrefix(target, "/"))]; ok {
 				return id, resolvedExactly
 			}
+		}
+		// Fall back to a suffix match, since a link is written relative to the
+		// vault while a stored path is absolute. Every match is collected and
+		// ranked rather than the first returned: map order is random, and two
+		// vaults can both hold proj/proj.md.
+		suffix := "/" + pathKey(target)
+		var matches []int64
+		for storedPath, id := range idx.byPath {
+			if strings.HasSuffix(storedPath, suffix) {
+				matches = append(matches, id)
+			}
+		}
+		if len(matches) > 0 {
+			idx.sortByDepth(matches)
+			return idx.preferVault(matches, from)
 		}
 	}
 
 	ids := idx.byBase[baseKey(target)]
-	switch len(ids) {
-	case 0:
+	if len(ids) == 0 {
 		return 0, unresolvable
-	case 1:
-		return ids[0], resolvedExactly
-	default:
-		return ids[0], resolvedAmbiguously
 	}
+	return idx.preferVault(ids, from)
 }
 
 // confluenceEdges links a page to its parent. The most reliable relation
@@ -413,7 +496,7 @@ func (idx *index) frontmatterEdges() ([]edge, OriginStats) {
 			}
 			for _, target := range bracketedTargetsIn(s.Meta[key]) {
 				idx.noteFrontmatterTarget(s.ID, target)
-				dst, res := idx.resolveTarget(target)
+				dst, res := idx.resolveTarget(target, s.Path)
 				switch res {
 				case notANote:
 					continue
@@ -426,6 +509,21 @@ func (idx *index) frontmatterEdges() ([]edge, OriginStats) {
 				if dst != s.ID {
 					out.add(s.ID, dst, relForProperty(key))
 				}
+			}
+		}
+		for _, key := range issueKeyProperties {
+			v := metaString(s.Meta, key)
+			if v == "" {
+				continue
+			}
+			dst, ok := idx.byKey[strings.ToUpper(v)]
+			if !ok {
+				st.Unresolved++
+				continue
+			}
+			// The issue export itself carries its own key.
+			if dst != s.ID {
+				out.add(s.ID, dst, RelTracks)
 			}
 		}
 	}
@@ -460,7 +558,7 @@ func (idx *index) wikilinkEdges() ([]edge, OriginStats) {
 			if idx.fmTargets[s.ID][strings.TrimSpace(target)] {
 				continue
 			}
-			dst, res := idx.resolveTarget(target)
+			dst, res := idx.resolveTarget(target, s.Path)
 			switch res {
 			case notANote:
 				st.Skipped++

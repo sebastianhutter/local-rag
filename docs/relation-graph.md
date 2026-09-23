@@ -149,6 +149,14 @@ out of ordinary values: a `page_id` of `"1"` would resolve to a note called
 
 *252 edges, across `related`, `parent`, `author`, `baseline`.*
 
+**One exception to "only brackets": an issue key.** A note whose `source_key`
+names an indexed issue — `source_key: PROJ-142` — gets a `tracks` edge to that
+issue's own record. It is not a guess: the key resolves exactly, through the
+`issue_key` the export carries, not by name, so it cannot invent a relation out
+of an ordinary value the way a bare link target would. This is how a work note
+reaches the ticket it is about even when the key never appears in its text, or
+the ticket is mentioned by so much that the mention would be filtered as a hub.
+
 ### `wikilink` — links in the body
 
 Body `[[links]]`, minus any target a frontmatter property already claimed: the
@@ -161,11 +169,27 @@ cheap to do so:
 | Link form | Resolution |
 |---|---|
 | `[[Note]]` | file name, case-insensitive |
-| `[[Folder/Note]]` | path match first, then path suffix |
+| `[[Folder/Note]]` | path match first — including relative to the linking note's vault — then path suffix |
 | `[[Note#Heading]]` | heading stripped, note resolved |
 | `[[#Heading]]`, `[[^block]]` | intra-note reference — not an edge |
 | `[[image.png]]`, `[[spec.pdf]]` | attachment — not an edge |
-| ambiguous name | shallowest path wins (Obsidian's rule), stably |
+| ambiguous name | a match in the linking note's own vault first; then shallowest path wins (Obsidian's rule), stably |
+
+**The linking note's vault comes first.** Obsidian never resolves a link outside
+its vault, but here several vaults and tracker exports share one index, and a
+note name is rarely unique across all of them. Resolving corpus-wide by shortest
+absolute path handed the choice to whichever tree happened to sit shallower on
+disk: a second vault whose task notes were named after issue keys sent every
+`[[proj-142]]` to the Jira export instead of the task, and made the first vault's
+`[[Some Project]]` land in the second. So a candidate under the linking note's
+own vault root (`obsidian_vaults`) wins, and ambiguity is judged within that
+vault. Only when the vault holds no such note does the corpus-wide rule apply,
+which keeps a vault note's `[[PROJ-7]]` reaching the issue export.
+
+A path-suffix match collects every candidate and ranks it the same way, rather
+than taking the first one map iteration yields. With two vaults both holding
+`proj/proj.md`, the old behaviour picked either, differently from one rebuild to
+the next.
 
 Aliases are **not** implemented, because the vault this was built against
 contains none. Unresolved references are reported separately from skipped ones,
@@ -339,6 +363,20 @@ answer is a single node rather than a fan-out. So a `child_of` neighbour is
 returned whatever its degree, while expansion still refuses to travel *through*
 it — which is what would drag in the forty siblings.
 
+Three relations count as a parent: `child_of` from the wiki and tracker
+hierarchies, a vault note's `parent` property, and `tracks`, the issue a work
+note declares itself to be about. Each answers "what does this belong to" or
+"what is this about" with one node. `related` and plain links do not: they say
+nothing about belonging.
+
+**A hub can be climbed, not crossed.** From a node over the cap, expansion
+follows only that node's own parent-like edges, upward, in the direction they
+were stored. That is one node per edge — never the fan-out the cap exists to
+stop — and without it a finding reaches its task and stops whenever the task is
+busy, which is exactly when the task's own issue is worth reaching. Arriving at a
+hub from its parent opens nothing: the route down to its other children stays
+shut.
+
 **A single seed is exempt too**, and this one was learned the hard way. A caller
 naming one node is asking about that node: "what depends on this Terraform
 module" is a question *about* a high-degree node — the module with 280 callers is
@@ -362,7 +400,7 @@ more than one four hundred things mention. Without that ordering, a traversal
 surfaces the corpus's most generic documents first.
 
 That reasoning inverts for a parent, whose degree merely counts its children, so
-a `child_of` neighbour ranks as though nothing pointed at it. Without that it
+a parent-like neighbour ranks as though nothing pointed at it. Without that it
 would sort to the back and be cut by the per-seed cap — the exemption above
 would be undone by the ranking.
 

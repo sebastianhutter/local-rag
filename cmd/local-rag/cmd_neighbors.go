@@ -150,7 +150,7 @@ func resolveSource(conn *sql.DB, arg string) (int64, string, error) {
 
 func init() {
 	neighborsCmd.Flags().StringSliceVar(&neighborsRels, "rel", nil,
-		"Only follow these relations (e.g. links_to, child_of, mentions, related)")
+		"Only follow these relations (e.g. links_to, child_of, parent, tracks, mentions, related)")
 	neighborsCmd.Flags().StringSliceVar(&neighborsOrigins, "origin", nil,
 		"Only follow edges from these origins ("+strings.Join(graph.AllOrigins, ", ")+")")
 	neighborsCmd.Flags().IntVar(&neighborsHops, "hops", graph.DefaultHops,
