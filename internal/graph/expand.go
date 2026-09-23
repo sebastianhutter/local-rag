@@ -148,19 +148,30 @@ func Expand(conn *sql.DB, seeds []int64, opts ExpandOptions) ([]Neighbour, error
 		// Only expand through nodes that are not hubs. Seeds are subject to
 		// the same rule: a seed that enumerates 570 tickets is a hub whatever
 		// put it in the result set.
-		var expandable []int64
+		//
+		// A hub may still be climbed: from a node over the cap, only its own
+		// parent-like edges are followed, upward. That is one node per edge
+		// and never the fan-out the cap exists to stop -- but without it a
+		// finding reaches its task and stops there whenever the task is busy,
+		// which is exactly when the task's own issue is worth reaching.
+		expandable := frontier
+		hubs := make(map[int64]bool)
 		for _, id := range frontier {
-			if degrees[id] <= opts.HubCap || (hop == 1 && deliberateSeed) {
-				expandable = append(expandable, id)
+			if degrees[id] > opts.HubCap && !(hop == 1 && deliberateSeed) {
+				hubs[id] = true
 			}
 		}
-		if len(expandable) == 0 {
-			break
-		}
 
-		edges, err := adjacentEdges(conn, expandable, opts)
+		all, err := adjacentEdges(conn, expandable, opts)
 		if err != nil {
 			return nil, err
+		}
+		edges := all[:0]
+		for _, e := range all {
+			if hubs[e.src] && !e.upward {
+				continue
+			}
+			edges = append(edges, e)
 		}
 
 		// Order candidates by the specificity of the destination before the
@@ -186,7 +197,7 @@ func Expand(conn *sql.DB, seeds []int64, opts ExpandOptions) ([]Neighbour, error
 			// is precisely the question worth answering, and the answer is
 			// one node rather than a fan-out. Expansion still refuses to
 			// travel *through* it, which is what would drag in the siblings.
-			if !opts.IncludeHubs && e.rel != RelChildOf && degrees[e.dst] > opts.HubCap {
+			if !opts.IncludeHubs && !isParentLike(e.rel) && degrees[e.dst] > opts.HubCap {
 				continue
 			}
 			if !deliberateSeed && perSeed[e.src] >= opts.PerSeedLimit {
@@ -242,10 +253,24 @@ func Expand(conn *sql.DB, seeds []int64, opts ExpandOptions) ([]Neighbour, error
 // though nothing else pointed at it, which also keeps it inside PerSeedLimit
 // instead of being sorted to the back and cut.
 func effectiveDegree(rel string, degree int) int {
-	if rel == RelChildOf {
+	if isParentLike(rel) {
 		return 0
 	}
 	return degree
+}
+
+// isParentLike reports whether an edge answers "what does this belong to" or
+// "what is this about" with a single node: a wiki or issue parent (child_of),
+// a vault note's parent property, or the issue a work note tracks. Each is
+// exempt from the hub filter and ranked first, for the reason effectiveDegree
+// gives. A passing mention or a plain link is not: it says nothing about
+// belonging.
+func isParentLike(rel string) bool {
+	switch rel {
+	case RelChildOf, RelParent, RelTracks:
+		return true
+	}
+	return false
 }
 
 // loadDegrees reads the undirected degree of every node that has an edge. The
@@ -279,6 +304,9 @@ type adjacentEdge struct {
 	src, dst int64
 	rel      string
 	origin   string
+	// upward is set when the edge is parent-like and is being followed from
+	// the child to the parent, the direction it was stored in.
+	upward bool
 }
 
 // adjacentEdges returns the edges touching the given nodes in either
@@ -332,6 +360,8 @@ func adjacentEdges(conn *sql.DB, ids []int64, opts ExpandOptions) ([]adjacentEdg
 		// names the node that produced this neighbour.
 		if !from[e.src] && from[e.dst] {
 			e.src, e.dst = e.dst, e.src
+		} else {
+			e.upward = isParentLike(e.rel)
 		}
 		out = append(out, e)
 	}

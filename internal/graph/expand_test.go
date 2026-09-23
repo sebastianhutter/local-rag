@@ -521,3 +521,74 @@ func TestExpandSingleSeedStillStopsAtHubsLater(t *testing.T) {
 		t.Errorf("got %v, want just the hub -- hop 2 must not pass through it", ids(got))
 	}
 }
+
+// A vault note's parent property and the issue a work note tracks answer the
+// same question a wiki parent does, so they are exempt from the hub filter too.
+func TestExpandReturnsParentPropertyAndTrackedIssueWhenHubs(t *testing.T) {
+	db, coll := setupExpandDB(t)
+	finding := addNode(t, db, coll, "Finding", "f")
+	task := addNode(t, db, coll, "Task", "t")
+	issue := addNode(t, db, coll, "Issue", "i")
+	addEdge(t, db, finding, task, RelParent, OriginFrontmatter)
+	addEdge(t, db, task, issue, RelTracks, OriginFrontmatter)
+	for i := 0; i < 8; i++ {
+		sibling := addNode(t, db, coll, fmt.Sprintf("Entry%d", i), "x")
+		addEdge(t, db, sibling, task, RelParent, OriginFrontmatter)
+		mail := addNode(t, db, coll, fmt.Sprintf("Mail%d", i), "m")
+		addEdge(t, db, mail, issue, RelMentions, OriginTicket)
+	}
+
+	got, err := Expand(db, []int64{finding}, ExpandOptions{HubCap: 5, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].SourceID != task {
+		t.Fatalf("one hop: got %v, want just the task %d", ids(got), task)
+	}
+
+	// Two hops climb out of the busy task to its issue -- and only that: the
+	// task's other entries and the issue's mentions stay out.
+	got, err = Expand(db, []int64{finding}, ExpandOptions{Hops: 2, HubCap: 5, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []int64{task, issue}; fmt.Sprint(ids(got)) != fmt.Sprint(want) {
+		t.Errorf("two hops: got %v, want %v -- a hub is climbed upward, never fanned out", ids(got), want)
+	}
+}
+
+// Climbing is upward only: arriving at a busy node from its parent must not
+// open a route down to its other children.
+func TestExpandDoesNotClimbDownOutOfAHub(t *testing.T) {
+	db, coll := setupExpandDB(t)
+	project := addNode(t, db, coll, "Project", "p")
+	task := addNode(t, db, coll, "Task", "t")
+	addEdge(t, db, task, project, RelParent, OriginFrontmatter)
+	for i := 0; i < 8; i++ {
+		entry := addNode(t, db, coll, fmt.Sprintf("Entry%d", i), "x")
+		addEdge(t, db, entry, task, RelParent, OriginFrontmatter)
+	}
+	other := addNode(t, db, coll, "OtherSeed", "o")
+
+	// Two seeds, so the task is not a deliberate single seed.
+	got, err := Expand(db, []int64{project, other}, ExpandOptions{Hops: 2, HubCap: 5, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(ids(got)) != fmt.Sprint([]int64{task}) {
+		t.Errorf("got %v, want only the task %d", ids(got), task)
+	}
+}
+
+func TestIsParentLike(t *testing.T) {
+	for _, rel := range []string{RelChildOf, RelParent, RelTracks} {
+		if !isParentLike(rel) {
+			t.Errorf("%s is not treated as a parent", rel)
+		}
+	}
+	for _, rel := range []string{RelMentions, RelLinksTo, RelDependsOn, "related"} {
+		if isParentLike(rel) {
+			t.Errorf("%s is treated as a parent", rel)
+		}
+	}
+}
