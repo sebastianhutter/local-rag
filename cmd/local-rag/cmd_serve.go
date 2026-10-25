@@ -13,13 +13,13 @@ var serveCmd = &cobra.Command{
 	Short: "Start MCP server",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if servePort > 0 {
-			return localMCP.ServeSSE(servePort)
+			return localMCP.ServeHTTP(servePort)
 		}
 		return localMCP.ServeStdio()
 	},
 }
 
 func init() {
-	serveCmd.Flags().IntVar(&servePort, "port", 0, "Port for HTTP/SSE transport (default: stdio)")
+	serveCmd.Flags().IntVar(&servePort, "port", 0, "Port for Streamable HTTP transport at /mcp (default: stdio)")
 	rootCmd.AddCommand(serveCmd)
 }

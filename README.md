@@ -94,7 +94,7 @@ local-rag prune obsidian        # a single collection
 Launch `local-rag` with no arguments (or `local-rag gui`) to start the menu bar app. There is no Dock icon — it lives entirely in the macOS menu bar.
 
 **Menu bar features:**
-- **MCP server toggle** — start/stop the built-in MCP SSE server (default port 31123)
+- **MCP server toggle** — start/stop the built-in MCP server (Streamable HTTP, default port 31123)
 - **Status display** — collection and chunk counts, indexing progress
 - **Index menu** — trigger indexing for individual collections or all at once
 - **Settings** — configure sources, embedding model, **Ollama hosts** (ordered endpoints; first reachable one that has the model is used, else local) and **embedding batch size**, search weights, MCP port, auto-reindex interval, start-on-login
@@ -108,9 +108,9 @@ local-rag exposes 5 MCP tools: `rag_search`, `rag_list_collections`, `rag_collec
 
 The `rag_search` tool supports a `metadata_filter` parameter — a JSON object of key-value pairs for filtering by arbitrary metadata fields (e.g. `{"source": "jira", "issue_key": "PROJ-123"}`) — and a `path` parameter to scope results to a subfolder or repo by a case-insensitive substring of the source path (e.g. `"infrastructure/modules"`). Its `collection` parameter accepts either a collection name or a collection *type* (`system`, `project`, `code`), so a search can be scoped to all code repos at once.
 
-### GUI Mode (SSE)
+### GUI Mode (Streamable HTTP)
 
-When running as a menu bar app, the MCP server uses SSE transport on `http://127.0.0.1:31123/sse`.
+When running as a menu bar app, the MCP server uses the Streamable HTTP transport on `http://127.0.0.1:31123/mcp`. The older SSE transport (`/sse`) was removed: it is deprecated in the MCP spec, and clients that speak only Streamable HTTP get a 405 from it. Requests carrying a non-localhost `Origin` header are rejected, so a web page in your browser cannot query the server.
 
 **Claude Code** — add to your project's `.mcp.json`:
 
@@ -118,8 +118,8 @@ When running as a menu bar app, the MCP server uses SSE transport on `http://127
 {
   "mcpServers": {
     "local-rag": {
-      "type": "sse",
-      "url": "http://127.0.0.1:31123/sse"
+      "type": "http",
+      "url": "http://127.0.0.1:31123/mcp"
     }
   }
 }
@@ -250,7 +250,7 @@ hub suppression is a precondition rather than a refinement.
 local-rag status            Database stats, collection counts, Ollama status
 local-rag graph rebuild     Rebuild the relation graph (see above)
 local-rag prune [NAME]      Remove stale sources (see Pruning above)
-local-rag serve [--port N]  Start MCP server (stdio, or SSE on given port)
+local-rag serve [--port N]  Start MCP server (stdio, or Streamable HTTP at /mcp on given port)
 local-rag gui               Start menu bar app (default when no subcommand)
 local-rag --version         Print version
 local-rag -v, --verbose     Enable debug logging (global flag)
@@ -292,7 +292,7 @@ Config file: `~/.local-rag/config.json`
 | `ocr.max_file_size_mb`              | `100`                                     | Skip OCR if file exceeds this size       |
 | `ocr.min_word_count`                | `10`                                      | OCR pages with fewer extracted words     |
 | `gui.auto_start_mcp`                | `true`                                    | Start MCP server when GUI launches       |
-| `gui.mcp_port`                      | `31123`                                   | SSE server port                          |
+| `gui.mcp_port`                      | `31123`                                   | MCP HTTP server port                     |
 | `gui.auto_reindex`                  | `false`                                   | Enable periodic re-indexing              |
 | `gui.auto_reindex_interval_minutes` | `60`                                      | Minutes between auto-reindex runs        |
 | `gui.start_on_login`                | `false`                                   | Register as login item via launchd       |
@@ -305,7 +305,7 @@ Config file: `~/.local-rag/config.json`
 | Database     | SQLite + sqlite-vec + FTS5 | Single file, no server                 |
 | Embeddings   | Ollama + bge-m3 (1024d)    | Fully local, no API keys               |
 | GUI          | Fyne v2 + systray          | macOS menu bar app                     |
-| MCP          | mcp-go                     | SSE and stdio transports               |
+| MCP          | mcp-go                     | Streamable HTTP and stdio transports   |
 | PDF          | go-pdfium (WASM/Wazero)    | No CGO needed for PDF                  |
 | PDF OCR      | tesseract (optional)       | Fallback for scanned/image-only PDFs   |
 | DOCX         | archive/zip + encoding/xml | Word document extraction (.docx, .dotx)|
@@ -353,7 +353,7 @@ internal/
   search/            Hybrid search engine (vector + FTS + RRF)
   parser/            File parsers (markdown, pdf, docx, epub, html, code, ...)
   indexer/           Source indexers, shared batching, pruning
-  mcp/               MCP server (tools, SSE, stdio)
+  mcp/               MCP server (tools, Streamable HTTP, stdio)
   gui/               Fyne menu bar app, settings, log viewer
 configs/
   config.example.json  Annotated configuration template

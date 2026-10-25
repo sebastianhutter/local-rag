@@ -740,8 +740,8 @@ func (a *App) buildMCPTab(cfg *config.Config, w fyne.Window) fyne.CanvasObject {
 {
   "mcpServers": {
     "local-rag": {
-      "type": "sse",
-      "url": "http://127.0.0.1:%d/sse"
+      "type": "http",
+      "url": "http://127.0.0.1:%d/mcp"
     }
   }
 }
@@ -750,11 +750,11 @@ Claude Desktop (claude_desktop_config.json):
 {
   "mcpServers": {
     "local-rag": {
-      "type": "sse",
-      "url": "http://127.0.0.1:%d/sse"
+      "command": "/Applications/local-rag.app/Contents/MacOS/local-rag",
+      "args": ["serve"]
     }
   }
-}`, cfg.GUI.MCPPort, cfg.GUI.MCPPort))
+}`, cfg.GUI.MCPPort))
 
 	autoReindexCheck := widget.NewCheck("Auto-reindex periodically", func(b bool) {
 		cfg.GUI.AutoReindex = b

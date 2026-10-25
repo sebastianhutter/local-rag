@@ -137,7 +137,7 @@ Replayed against the real traversal, **78% of those queries gained at least one 
 | Database     | SQLite + sqlite-vec + FTS5 | Single file, no server                 |
 | Embeddings   | Ollama + bge-m3 (1024d)    | Fully local, no API keys               |
 | GUI          | Fyne v2 + systray          | macOS menu bar app                     |
-| MCP          | mcp-go                     | SSE and stdio transports               |
+| MCP          | mcp-go                     | Streamable HTTP and stdio transports   |
 | PDF          | go-pdfium (WASM/Wazero)    | No CGO needed for PDF                  |
 | PDF OCR      | tesseract (optional)       | Fallback for scanned/image-only PDFs   |
 | DOCX         | archive/zip + encoding/xml | Word document extraction (.docx, .dotx)|
@@ -277,7 +277,7 @@ local-rag/
 │       ├── cmd_graph.go             # graph rebuild, graph stats
 │       ├── cmd_neighbors.go         # neighbors
 │       ├── cmd_status.go            # status
-│       ├── cmd_serve.go             # serve (stdio / SSE)
+│       ├── cmd_serve.go             # serve (stdio / Streamable HTTP)
 │       └── cmd_gui.go               # gui
 ├── configs/
 │   └── config.example.json          # Annotated configuration template
@@ -299,7 +299,7 @@ local-rag/
 │   ├── parser/                      # File parsers (markdown, pdf, docx, epub, html, code, rss, email, calibre)
 │   ├── indexer/                     # Source indexers (obsidian, email, calibre, rss, git, project),
 │   │                                #   shared batching (batch.go), pruning (prune.go)
-│   ├── mcp/                         # MCP server (tools, SSE, stdio)
+│   ├── mcp/                         # MCP server (tools, Streamable HTTP, stdio)
 │   └── gui/                         # Fyne menu bar app, settings, log viewer
 └── scripts/
     ├── build-app.sh                 # Create macOS .app bundle
@@ -368,7 +368,7 @@ local-rag -v, --verbose                 # Debug logging (global flag)
 
 # MCP server
 local-rag serve                         # Start MCP server (stdio transport)
-local-rag serve --port 31123            # Start with HTTP/SSE transport
+local-rag serve --port 31123            # Start with Streamable HTTP transport (/mcp)
 
 # Six MCP tools: rag_search, rag_neighbors, rag_list_collections, rag_collection_info,
 #   rag_index, rag_prune
@@ -495,17 +495,17 @@ Indexing skips unchanged files by comparing the stored `file_modified_at` agains
 
 ## MCP Server Registration
 
-### GUI Mode (SSE) — recommended for Claude Code
+### GUI Mode (Streamable HTTP) — recommended for Claude Code
 
-When the menu bar app is running, its built-in MCP server uses SSE on `http://127.0.0.1:31123/sse`.
+When the menu bar app is running, its built-in MCP server uses Streamable HTTP on `http://127.0.0.1:31123/mcp`. SSE is gone: the MCP spec deprecated it on 2025-03-26, and clients that speak only Streamable HTTP POST to the endpoint and got a 405 from the SSE handler. `internal/mcp/http.go` rejects any request whose `Origin` is not localhost — binding to 127.0.0.1 does not stop a page in the user's browser from reaching the server via DNS rebinding.
 
 Add to the project's `.mcp.json`:
 ```json
 {
   "mcpServers": {
     "local-rag": {
-      "type": "sse",
-      "url": "http://127.0.0.1:31123/sse"
+      "type": "http",
+      "url": "http://127.0.0.1:31123/mcp"
     }
   }
 }
