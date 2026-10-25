@@ -11,8 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mark3labs/mcp-go/server"
-
 	"github.com/sebastianhutter/local-rag-go/internal/config"
 	"github.com/sebastianhutter/local-rag-go/internal/db"
 	"github.com/sebastianhutter/local-rag-go/internal/graph"
@@ -21,18 +19,18 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// MCPService — in-process SSE server
+// MCPService — in-process Streamable HTTP server
 // ---------------------------------------------------------------------------
 
-// MCPService manages an in-process MCP SSE server.
+// MCPService manages an in-process MCP Streamable HTTP server.
 type MCPService struct {
-	mu        sync.Mutex
-	running   bool
-	port      int
-	sseServer *server.SSEServer
+	mu         sync.Mutex
+	running    bool
+	port       int
+	httpServer *http.Server
 }
 
-// Start creates the MCP server and starts SSE on the given port.
+// Start creates the MCP server and serves it over Streamable HTTP on the given port.
 func (s *MCPService) Start(port int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -48,19 +46,16 @@ func (s *MCPService) Start(port int) error {
 	}
 	ln.Close()
 
-	mcpServer := localMCP.CreateServer()
-	sseServer := server.NewSSEServer(mcpServer)
+	httpServer := localMCP.NewHTTPServer(localMCP.CreateServer(), port)
+	slog.Info("starting MCP server (Streamable HTTP)", "url", "http://"+httpServer.Addr+localMCP.EndpointPath)
 
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	slog.Info("starting MCP server (SSE)", "addr", addr)
-
-	s.sseServer = sseServer
+	s.httpServer = httpServer
 	s.port = port
 	s.running = true
 
 	go func() {
-		if err := sseServer.Start(addr); err != nil {
-			slog.Error("MCP SSE server stopped", "err", err)
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("MCP HTTP server stopped", "err", err)
 			s.mu.Lock()
 			s.running = false
 			s.mu.Unlock()
@@ -70,7 +65,7 @@ func (s *MCPService) Start(port int) error {
 	return nil
 }
 
-// Stop shuts down the SSE server with a 5-second timeout.
+// Stop shuts down the HTTP server with a 5-second timeout.
 func (s *MCPService) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -83,11 +78,11 @@ func (s *MCPService) Stop() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if s.sseServer != nil {
-		if err := s.sseServer.Shutdown(ctx); err != nil {
+	if s.httpServer != nil {
+		if err := s.httpServer.Shutdown(ctx); err != nil {
 			slog.Error("MCP shutdown error", "err", err)
 		}
-		s.sseServer = nil
+		s.httpServer = nil
 	}
 
 	s.running = false

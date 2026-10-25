@@ -110,7 +110,7 @@ The MCP server exposes the RAG as tools that Claude Desktop and Claude Code can 
 - **`rag_collection_info`** — detailed info about a specific collection
 - **`rag_index`** — trigger indexing for a collection
 
-Uses the `mcp-go` library with both SSE and stdio transports. The GUI (menu bar app) exposes an SSE server on `http://127.0.0.1:31123/sse`; `local-rag serve` exposes stdio for use as a Claude Desktop subprocess.
+Uses the `mcp-go` library with Streamable HTTP and stdio transports. The GUI (menu bar app) serves Streamable HTTP on `http://127.0.0.1:31123/mcp`, rejecting requests with a non-localhost `Origin`; `local-rag serve` exposes stdio for use as a Claude Desktop subprocess.
 
 ## Data Flow: Indexing
 
@@ -252,7 +252,7 @@ internal/
   search/                Hybrid search engine (vector + FTS + RRF)
   parser/                File parsers (markdown, pdf, docx, epub, html, code, ...)
   indexer/               Source indexers (obsidian, email, calibre, rss, git, project)
-  mcp/                   MCP server (tools, SSE, stdio)
+  mcp/                   MCP server (tools, Streamable HTTP, stdio)
   gui/                   Fyne menu bar app, settings, log viewer
 scripts/
   build-app.sh           Create macOS .app bundle

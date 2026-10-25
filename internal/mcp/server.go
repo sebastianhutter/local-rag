@@ -2,7 +2,6 @@
 package mcp
 
 import (
-	"fmt"
 	"log/slog"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -91,14 +90,12 @@ func ServeStdio() error {
 	return server.ServeStdio(s)
 }
 
-// ServeSSE runs the MCP server over HTTP/SSE on the given port.
-func ServeSSE(port int) error {
+// ServeHTTP runs the MCP server over Streamable HTTP on the given port.
+func ServeHTTP(port int) error {
 	resolveEmbeddingHost()
-	s := CreateServer()
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	slog.Info("starting MCP server (SSE)", "addr", addr)
-	sseServer := server.NewSSEServer(s)
-	return sseServer.Start(addr)
+	srv := NewHTTPServer(CreateServer(), port)
+	slog.Info("starting MCP server (Streamable HTTP)", "url", "http://"+srv.Addr+EndpointPath)
+	return srv.ListenAndServe()
 }
 
 // Tool definitions
